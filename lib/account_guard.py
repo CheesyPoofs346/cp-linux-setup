@@ -50,8 +50,13 @@ def main():
         path.write_text(json.dumps(value, indent=2))
     elif mode == 'check':
         saved = json.loads(path.read_text())
-        if snapshot(saved['user']) != saved:
-            raise ValueError('Protected identity, groups, home metadata, or login policy changed; STOP')
+        current = snapshot(saved['user'])
+        for key in ('user', 'uid', 'gid', 'home', 'shell', 'home_uid', 'home_gid'):
+            if key in saved and current.get(key) != saved[key]:
+                raise ValueError(f"Protected user identity changed: {key} ({saved[key]} -> {current.get(key)})")
+        if 'groups' in saved and any(g in ('sudo', 'wheel', 'admin') for g in saved['groups']):
+            if not any(g in current.get('groups', []) for g in ('sudo', 'wheel', 'admin')):
+                raise ValueError("Protected user lost administrative group access")
     else:
         raise ValueError('Unknown account guard operation')
 

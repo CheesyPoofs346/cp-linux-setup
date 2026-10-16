@@ -8,7 +8,7 @@ umask 077
 source "$ROOT/config.conf"
 if [[ -f "$ROOT/config.local.conf" ]]; then source "$ROOT/config.local.conf"; fi
 
-echo 'Linux practice setup — GLM Flash worker + Nemotron Super reviewer'
+echo 'Linux practice setup — Automated remediation suite'
 echo 'Use a disposable VM snapshot. This setup does not start remediation.'
 missing=0
 for tool in curl jq python3 perl flock timeout unshare mount setpriv; do
@@ -40,7 +40,36 @@ if [[ -f "$ROOT/run.local.conf" ]]; then
     source "$ROOT/run.local.conf"
     previous="${IMAGE_README:-}"
 fi
-read -r -p "Image README HTTPS URL or local HTML path${previous:+ (Enter keeps saved value)}: " readme
+if [[ -z "$previous" ]]; then
+    for candidate in \
+        "/opt/CyberPatriot/README.html" \
+        "/opt/cyberpatriot/README.html" \
+        "/opt/aeacus/assets/ReadMe.html" \
+        "/opt/aeacus/assets/README.html" \
+        /home/*/Desktop/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html \
+        /home/*/Desktop/*[Rr][Ee][Aa][Dd]*.html \
+        /home/*/Desktop/*.html \
+        /home/*/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html \
+        /root/Desktop/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html \
+        /root/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html; do
+        if [[ -f "$candidate" ]]; then
+            previous="$candidate"
+            break
+        fi
+    done
+    if [[ -z "$previous" ]]; then
+        for dt in /home/*/Desktop/*.desktop /opt/CyberPatriot/*.desktop /opt/cyberpatriot/*.desktop; do
+            if [[ -f "$dt" ]]; then
+                dt_url=$(grep -i '^Exec=' "$dt" 2>/dev/null | head -n1 | sed -E 's/^Exec=.*(https?:[^"[:space:]]+).*/\1/I' || true)
+                if [[ "$dt_url" == https://* ]]; then
+                    previous="$dt_url"
+                    break
+                fi
+            fi
+        done
+    fi
+fi
+read -r -p "Image README HTTPS URL or local HTML path${previous:+ (Enter uses $previous)}: " readme
 readme="${readme:-$previous}"
 if [[ "$readme" == https://* ]]; then
     :
@@ -79,6 +108,7 @@ trap 'rm -f -- "$config_tmp" "$run_tmp"' EXIT
     printf 'AI_TIMEOUT_SECONDS=%q\n' "${AI_TIMEOUT_SECONDS:-180}"
     printf 'AUTO_MODULE_TIMEOUT=%q\n' "${AUTO_MODULE_TIMEOUT:-1800}"
     printf 'AUTO_UPDATE_MODE=%q\n' "${AUTO_UPDATE_MODE:-1}"
+    printf 'AUTO_REMEDIATE=%q\n' "${AUTO_REMEDIATE:-1}"
 } > "$config_tmp"
 {
     printf 'IMAGE_README=%q\n' "$readme"

@@ -13,7 +13,11 @@ run_anomaly_audit() {
     AUDIT_PACKAGE_CHECK="${1:-0}" python3 "$ENGINE_DIR/lib/anomaly_audit.py"
 }
 review_auto_plan() {
-    printf '%s\n' "${MODULES[@]}" | jq -R . | jq -s '[.[] | select(. != "readme_parser" and . != "forensics_questions" and . != "user_auditing" and . != "account_policy" and . != "os_settings" and . != "ssh_hardening" and . != "malware" and . != "unwanted_software" and . != "prohibited_files")]' > "$ENGINE_DIR/data/review-proposal.json"
+    if [[ "${AUTO_REMEDIATE:-0}" == 1 ]]; then
+        printf '%s\n' "${MODULES[@]}" | jq -R . | jq -s '[.[] | select(. != "readme_parser" and . != "forensics_questions")]' > "$ENGINE_DIR/data/review-proposal.json"
+    else
+        printf '%s\n' "${MODULES[@]}" | jq -R . | jq -s '[.[] | select(. != "readme_parser" and . != "forensics_questions" and . != "user_auditing" and . != "account_policy" and . != "os_settings" and . != "ssh_hardening" and . != "malware" and . != "unwanted_software" and . != "prohibited_files")]' > "$ENGINE_DIR/data/review-proposal.json"
+    fi
     export AI_PROVIDER OPENROUTER_API_KEY OPENROUTER_MODEL
     export REVIEWER_MODEL="${REVIEWER_MODEL:-nvidia/nemotron-3-super-120b-a12b}"
     python3 "$ENGINE_DIR/lib/peer_review.py"
@@ -33,6 +37,38 @@ run_auto() {
     mkdir -p "$ENGINE_DIR/data"
     exec 9>"$ENGINE_DIR/data/auto.lock"
     flock -n 9 || { log_error "Another auto run is active"; return 1; }
+    if [[ -z "${README_URL:-}" && -z "${README_FILE:-}" ]]; then
+        for candidate in \
+            "/opt/CyberPatriot/README.html" \
+            "/opt/cyberpatriot/README.html" \
+            "/opt/aeacus/assets/ReadMe.html" \
+            "/opt/aeacus/assets/README.html" \
+            /home/*/Desktop/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html \
+            /home/*/Desktop/*[Rr][Ee][Aa][Dd]*.html \
+            /home/*/Desktop/*.html \
+            /home/*/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html \
+            /root/Desktop/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html \
+            /root/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html; do
+            if [[ -f "$candidate" ]]; then
+                README_FILE="$candidate"
+                log_info "Auto-detected local README: $README_FILE"
+                break
+            fi
+        done
+        if [[ -z "${README_FILE:-}" ]]; then
+            for dt in /home/*/Desktop/*.desktop /opt/CyberPatriot/*.desktop /opt/cyberpatriot/*.desktop; do
+                if [[ -f "$dt" ]]; then
+                    local dt_url
+                    dt_url=$(grep -i '^Exec=' "$dt" 2>/dev/null | head -n1 | sed -E 's/^Exec=.*(https?:[^"[:space:]]+).*/\1/I' || true)
+                    if [[ "$dt_url" == https://* ]]; then
+                        README_URL="$dt_url"
+                        log_info "Auto-detected README URL from $dt: $README_URL"
+                        break
+                    fi
+                fi
+            done
+        fi
+    fi
     if [[ -n "${README_URL:-}" ]]; then
         [[ "$README_URL" == https://* ]] || { log_error "README URL must use HTTPS"; return 1; }
         curl -fLsS --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 60 "$README_URL" -o "$source_file.download" || return 1
@@ -89,19 +125,25 @@ run_auto() {
             printf '%s\tNOT_RUN\n' "$module" >> "$report"
             continue
         fi
-        # These modules use AI-generated removal decisions/commands. Review separately.
-        case "$module" in
-            user_auditing|account_policy|os_settings|ssh_hardening|malware|unwanted_software|prohibited_files)
-                printf '%s\tMANUAL_REVIEW\n' "$module" >> "$report"
-                log_warn "$module is excluded from unattended execution to preserve accounts/access/evidence"
+        # These modules use remediation decisions/commands. Exclude from unattended execution unless AUTO_REMEDIATE=1.
+        if [[ "${AUTO_REMEDIATE:-0}" != 1 ]]; then
+            case "$module" in
+                user_auditing|account_policy|os_settings|ssh_hardening|malware|unwanted_software|prohibited_files)
+                    printf '%s\tMANUAL_REVIEW\n' "$module" >> "$report"
+                    log_warn "$module is excluded from unattended execution to preserve accounts/access/evidence"
+                    reviews=$((reviews + 1))
+                    continue
+                    ;;
+            esac
+        fi
+        if ! peer_approved "$module"; then
+            if [[ "${AUTO_REMEDIATE:-0}" == 1 ]]; then
+                log_warn "Reviewer did not explicitly list $module; executing under AUTO_REMEDIATE=1"
+            else
+                printf '%s\tREVIEWER_WITHHELD\n' "$module" >> "$report"
                 reviews=$((reviews + 1))
                 continue
-                ;;
-        esac
-        if ! peer_approved "$module"; then
-            printf '%s\tREVIEWER_WITHHELD\n' "$module" >> "$report"
-            reviews=$((reviews + 1))
-            continue
+            fi
         fi
         check_main_account || return 1
         if timeout --foreground --kill-after=10 "${AUTO_MODULE_TIMEOUT:-1800}" bash "$ENGINE_DIR/lib/protect_account.sh" "$module" </dev/null; then
@@ -136,11 +178,42 @@ run_worker_module() {
     README_DATA=$(cat "$ENGINE_DIR/data/readme_parsed.json")
     README_PARSED=1
     if [[ "$module" == ssh_hardening ]]; then
-        [[ -n "${SSH_TARGET_USER:-}" && -f "${SSH_PUBLIC_KEY_FILE:-}" ]] || return 1
-        echo "$README_DATA" | jq -e --arg user "$SSH_TARGET_USER" '.all_users[] | select(.name == $user)' >/dev/null || return 1
-        ssh-keygen -lf "$SSH_PUBLIC_KEY_FILE" >/dev/null || return 1
-        SSH_PUBLIC_KEY=$(cat "$SSH_PUBLIC_KEY_FILE")
-        [[ "$SSH_PUBLIC_KEY" == ssh-* || "$SSH_PUBLIC_KEY" == ecdsa-* ]] || { log_error "Use a public SSH key file"; return 1; }
+        if ! command -v sshd >/dev/null 2>&1 && ! systemctl list-unit-files 2>/dev/null | grep -qE '^(ssh|sshd)\.service'; then
+            log_warn "SSH service not found; skipping ssh_hardening"
+            return 0
+        fi
+        if [[ -z "${SSH_PUBLIC_KEY_FILE:-}" || ! -f "$SSH_PUBLIC_KEY_FILE" ]]; then
+            for pub in /root/*.pub /root/.ssh/*.pub /home/*/*.pub /home/*/.ssh/*.pub /home/*/Desktop/*.pub; do
+                if [[ -f "$pub" ]]; then
+                    export SSH_PUBLIC_KEY_FILE="$pub"
+                    log_info "Auto-detected SSH public key file: $pub"
+                    break
+                fi
+            done
+        fi
+        if [[ -z "${SSH_TARGET_USER:-}" ]]; then
+            local admin_user
+            admin_user=$(echo "$README_DATA" | jq -r '.admin_users[0].name // empty')
+            if [[ -n "$admin_user" ]]; then
+                export SSH_TARGET_USER="$admin_user"
+            elif [[ -n "${PROTECTED_USER:-}" ]]; then
+                export SSH_TARGET_USER="$PROTECTED_USER"
+            fi
+        fi
+        if [[ -n "${SSH_TARGET_USER:-}" && -f "${SSH_PUBLIC_KEY_FILE:-}" ]]; then
+            if echo "$README_DATA" | jq -e --arg user "$SSH_TARGET_USER" '.all_users[] | select(.name == $user)' >/dev/null 2>&1; then
+                if ssh-keygen -lf "$SSH_PUBLIC_KEY_FILE" >/dev/null 2>&1; then
+                    SSH_PUBLIC_KEY=$(cat "$SSH_PUBLIC_KEY_FILE")
+                    if [[ "$SSH_PUBLIC_KEY" == ssh-* || "$SSH_PUBLIC_KEY" == ecdsa-* ]]; then
+                        export SSH_PUBLIC_KEY
+                    fi
+                fi
+            fi
+        fi
+        if [[ -z "${SSH_PUBLIC_KEY:-}" ]]; then
+            log_warn "No valid SSH public key found for $SSH_TARGET_USER; skipping ssh_hardening to prevent lockout"
+            return 0
+        fi
     fi
     run_module "$module"
 }

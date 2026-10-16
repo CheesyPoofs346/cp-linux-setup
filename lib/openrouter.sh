@@ -250,7 +250,7 @@ test_openrouter() {
     response=$(curl -sS --connect-timeout 15 --max-time "${AI_TIMEOUT_SECONDS:-180}" -X POST "$OPENROUTER_API_URL" \
         -H "Authorization: Bearer $OPENROUTER_API_KEY" \
         -H "Content-Type: application/json" \
-        -d "$test_payload") || { log_error "AI request failed or timed out"; return 1; }
+        -d "$test_payload") || { log_error "Analysis request failed or timed out"; return 1; }
 
     if echo "$response" | jq -e '.choices[0].message' >/dev/null 2>&1; then
         log_success "${AI_PROVIDER:-openrouter} API connection successful (model: $OPENROUTER_MODEL)"

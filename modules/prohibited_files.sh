@@ -403,7 +403,7 @@ run_prohibited_files() {
     fi
 
     if check_openrouter_config; then
-        log_info "Submitting candidate list to AI for triage..."
+        log_info "Submitting candidate list for automated triage..."
         local ai_response=$(invoke_prohibited_files_analysis "$candidate_json")
         if [[ $? -eq 0 ]]; then
             echo "$ai_response" > "$SCRIPT_DIR/../data/prohibited_ai_response.txt"
@@ -411,9 +411,9 @@ run_prohibited_files() {
             if [[ $? -eq 0 ]]; then
                 echo "$parsed_json" | jq '.' > "$SCRIPT_DIR/../data/prohibited_analysis.json"
                 local flagged_count=$(echo "$parsed_json" | jq '.flagged | length' 2>/dev/null)
-                log_info "AI flagged $flagged_count items for review"
+                log_info "Flagged $flagged_count items for review"
                 if [[ "$flagged_count" =~ ^[0-9]+$ ]] && (( flagged_count > 0 )); then
-                    log_section "AI Flagged Files"
+                    log_section "Flagged Files"
                     echo "$parsed_json" | jq -r '.flagged[] | "- \(.path) [\(.category)] (\(.confidence)): \(.reason)"' | while read -r line; do
                         log_warn "$line"
                     done
@@ -458,13 +458,13 @@ run_prohibited_files() {
                     fi
                 fi
             else
-                log_warn "AI response did not contain valid JSON"
+                log_warn "Triage response did not contain valid JSON"
             fi
         else
-            log_warn "AI analysis failed; see logs for details"
+            log_warn "Triage analysis failed; see logs for details"
         fi
     else
-        log_warn "OpenRouter API key not configured; skipping AI triage"
+        log_warn "API key not configured; skipping automated triage"
     fi
 
     return 0

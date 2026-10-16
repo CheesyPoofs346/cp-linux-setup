@@ -266,12 +266,12 @@ get_service_recommendations() {
     local critical_services="$2"
 
     if ! check_openrouter_config; then
-        log_error "OpenRouter API not configured - skipping AI-based service analysis"
+        log_error "API not configured - skipping service analysis"
         return 1
     fi
 
-    log_section "Analyzing Services with AI"
-    log_info "Sending service list to AI for analysis..."
+    log_section "Analyzing Services"
+    log_info "Analyzing service list..."
 
     # Construct the user prompt with service information
     local user_prompt="Running Services on the system:
@@ -342,7 +342,7 @@ Please analyze these services and recommend which ones should be stopped/disable
 apply_service_recommendations() {
     local recommendations="$1"
 
-    log_section "AI Service Analysis Results"
+    log_section "Service Analysis Results"
 
     # Save recommendations to file
     mkdir -p "$SCRIPT_DIR/../data"
@@ -453,18 +453,18 @@ run_service_auditing() {
         critical_services="none"
     fi
 
-    # Get AI recommendations
-    log_info "Requesting AI analysis from OpenRouter..."
+    # Get service recommendations
+    log_info "Requesting service analysis..."
     local recommendations=$(get_service_recommendations "$running_services" "$critical_services")
 
     if [[ $? -ne 0 || -z "$recommendations" ]]; then
-        log_error "Failed to get AI service recommendations"
+        log_error "Failed to get service recommendations"
         log_warn "Service auditing completed with hardcoded rules only"
-        log_warn "Make sure OpenRouter API key is configured in config.conf"
+        log_warn "Make sure API key is configured in config.conf"
         return 1
     fi
 
-    log_success "AI analysis completed successfully"
+    log_success "Service analysis completed successfully"
 
     # Apply recommendations
     apply_service_recommendations "$recommendations"

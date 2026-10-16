@@ -567,10 +567,10 @@ run_unwanted_software() {
 
     local use_ai=1
     if [[ -z "$OPENROUTER_API_KEY" ]]; then
-        log_warn "OpenRouter not configured; skipping AI triage"
+        log_warn "API key not configured; skipping automated triage"
         use_ai=0
     elif ! command_exists curl; then
-        log_error "curl is required for OpenRouter integration"
+        log_error "curl is required for API integration"
         use_ai=0
     fi
 
@@ -578,10 +578,10 @@ run_unwanted_software() {
         return 0
     fi
 
-    log_info "Submitting package data to AI for remediation guidance..."
+    log_info "Submitting package data for remediation guidance..."
     local ai_response=$(invoke_unwanted_package_analysis "$hardcoded_json" "$manual_json" "$readme_content")
     if [[ $? -ne 0 || -z "$ai_response" ]]; then
-        log_error "Failed to obtain AI guidance for unwanted software"
+        log_error "Failed to obtain guidance for unwanted software"
         return 1
     fi
 
@@ -589,7 +589,7 @@ run_unwanted_software() {
 
     local parsed_json=$(extract_json_from_response "$ai_response")
     if [[ $? -ne 0 ]]; then
-        log_error "AI response did not contain valid JSON"
+        log_error "Analysis response did not contain valid JSON"
         return 1
     fi
 
@@ -598,7 +598,7 @@ run_unwanted_software() {
     local removal_count=$(echo "$parsed_json" | jq '.packages_to_remove | length' 2>/dev/null)
     local review_count=$(echo "$parsed_json" | jq '.packages_for_review | length' 2>/dev/null)
 
-    log_section "AI Unwanted Software Recommendations"
+    log_section "Unwanted Software Recommendations"
     log_info "Packages to remove: ${removal_count:-0}"
     if [[ "$removal_count" =~ ^[0-9]+$ ]] && (( removal_count > 0 )); then
         echo "$parsed_json" \
