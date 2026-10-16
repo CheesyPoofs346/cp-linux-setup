@@ -28,32 +28,40 @@ export AUTO_REMEDIATE=1
 
 # Auto-detect README if unset or invalid
 if [[ -z "${IMAGE_README:-}" || (! -f "$IMAGE_README" && "$IMAGE_README" != https://*) ]]; then
-    for candidate in \
-        "/opt/CyberPatriot/README.html" \
-        "/opt/cyberpatriot/README.html" \
-        "/opt/aeacus/assets/ReadMe.html" \
-        "/opt/aeacus/assets/README.html" \
-        /home/*/Desktop/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html \
-        /home/*/Desktop/*[Rr][Ee][Aa][Dd]*.html \
-        /home/*/Desktop/*.html \
-        /home/*/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html \
-        /root/Desktop/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html \
-        /root/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html; do
-        if [[ -f "$candidate" ]]; then
-            IMAGE_README="$candidate"
-            echo "Auto-detected README: $IMAGE_README"
-            break
+    for dt in /home/*/Desktop/*[Rr][Ee][Aa][Dd][Mm][Ee]*.desktop \
+             /home/*/Desktop/*.desktop \
+             /opt/CyberPatriot/*.desktop \
+             /opt/cyberpatriot/*.desktop \
+             /root/Desktop/*[Rr][Ee][Aa][Dd][Mm][Ee]*.desktop; do
+        if [[ -f "$dt" && "$dt" != *[Ss]coring* && "$dt" != *[Ss]core* ]]; then
+            url=$(grep -i '^Exec=' "$dt" 2>/dev/null | head -n1 | sed -E 's/^Exec=.*(https?:[^"[:space:]]+).*/\1/I' || true)
+            if [[ "$url" == https://* ]]; then
+                IMAGE_README="$url"
+                echo "Auto-detected README URL from $dt: $IMAGE_README"
+                break
+            fi
+            dt_file=$(grep -i '^Exec=' "$dt" 2>/dev/null | head -n1 | sed -E 's/^Exec=[^/]*(\/[^"[:space:]]+).*/\1/' || true)
+            if [[ -f "$dt_file" && "$dt_file" != *[Ss]coring* && "$dt_file" != *[Ss]core* ]]; then
+                IMAGE_README="$dt_file"
+                echo "Auto-detected README from $dt: $IMAGE_README"
+                break
+            fi
         fi
     done
-    if [[ -z "${IMAGE_README:-}" || ! -f "$IMAGE_README" ]]; then
-        for dt in /home/*/Desktop/*.desktop /opt/CyberPatriot/*.desktop /opt/cyberpatriot/*.desktop; do
-            if [[ -f "$dt" ]]; then
-                url=$(grep -i '^Exec=' "$dt" 2>/dev/null | head -n1 | sed -E 's/^Exec=.*(https?:[^"[:space:]]+).*/\1/I' || true)
-                if [[ "$url" == https://* ]]; then
-                    IMAGE_README="$url"
-                    echo "Auto-detected README URL from $dt: $IMAGE_README"
-                    break
-                fi
+    if [[ -z "${IMAGE_README:-}" || (! -f "$IMAGE_README" && "$IMAGE_README" != https://*) ]]; then
+        for candidate in \
+            "/opt/CyberPatriot/README.html" \
+            "/opt/cyberpatriot/README.html" \
+            "/opt/aeacus/assets/ReadMe.html" \
+            "/opt/aeacus/assets/README.html" \
+            /home/*/Desktop/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html \
+            /home/*/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html \
+            /root/Desktop/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html \
+            /root/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html; do
+            if [[ -f "$candidate" && "$candidate" != *[Ss]coring* && "$candidate" != *[Ss]core* ]]; then
+                IMAGE_README="$candidate"
+                echo "Auto-detected README: $IMAGE_README"
+                break
             fi
         done
     fi

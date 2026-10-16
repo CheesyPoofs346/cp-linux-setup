@@ -41,30 +41,37 @@ if [[ -f "$ROOT/run.local.conf" ]]; then
     previous="${IMAGE_README:-}"
 fi
 if [[ -z "$previous" ]]; then
-    for candidate in \
-        "/opt/CyberPatriot/README.html" \
-        "/opt/cyberpatriot/README.html" \
-        "/opt/aeacus/assets/ReadMe.html" \
-        "/opt/aeacus/assets/README.html" \
-        /home/*/Desktop/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html \
-        /home/*/Desktop/*[Rr][Ee][Aa][Dd]*.html \
-        /home/*/Desktop/*.html \
-        /home/*/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html \
-        /root/Desktop/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html \
-        /root/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html; do
-        if [[ -f "$candidate" ]]; then
-            previous="$candidate"
-            break
+    for dt in /home/*/Desktop/*[Rr][Ee][Aa][Dd][Mm][Ee]*.desktop \
+             /home/*/Desktop/*.desktop \
+             /opt/CyberPatriot/*.desktop \
+             /opt/cyberpatriot/*.desktop \
+             /root/Desktop/*[Rr][Ee][Aa][Dd][Mm][Ee]*.desktop; do
+        if [[ -f "$dt" && "$dt" != *[Ss]coring* && "$dt" != *[Ss]core* ]]; then
+            dt_url=$(grep -i '^Exec=' "$dt" 2>/dev/null | head -n1 | sed -E 's/^Exec=.*(https?:[^"[:space:]]+).*/\1/I' || true)
+            if [[ "$dt_url" == https://* ]]; then
+                previous="$dt_url"
+                break
+            fi
+            dt_file=$(grep -i '^Exec=' "$dt" 2>/dev/null | head -n1 | sed -E 's/^Exec=[^/]*(\/[^"[:space:]]+).*/\1/' || true)
+            if [[ -f "$dt_file" && "$dt_file" != *[Ss]coring* && "$dt_file" != *[Ss]core* ]]; then
+                previous="$dt_file"
+                break
+            fi
         fi
     done
     if [[ -z "$previous" ]]; then
-        for dt in /home/*/Desktop/*.desktop /opt/CyberPatriot/*.desktop /opt/cyberpatriot/*.desktop; do
-            if [[ -f "$dt" ]]; then
-                dt_url=$(grep -i '^Exec=' "$dt" 2>/dev/null | head -n1 | sed -E 's/^Exec=.*(https?:[^"[:space:]]+).*/\1/I' || true)
-                if [[ "$dt_url" == https://* ]]; then
-                    previous="$dt_url"
-                    break
-                fi
+        for candidate in \
+            "/opt/CyberPatriot/README.html" \
+            "/opt/cyberpatriot/README.html" \
+            "/opt/aeacus/assets/ReadMe.html" \
+            "/opt/aeacus/assets/README.html" \
+            /home/*/Desktop/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html \
+            /home/*/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html \
+            /root/Desktop/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html \
+            /root/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html; do
+            if [[ -f "$candidate" && "$candidate" != *[Ss]coring* && "$candidate" != *[Ss]core* ]]; then
+                previous="$candidate"
+                break
             fi
         done
     fi

@@ -38,33 +38,42 @@ run_auto() {
     exec 9>"$ENGINE_DIR/data/auto.lock"
     flock -n 9 || { log_error "Another auto run is active"; return 1; }
     if [[ -z "${README_URL:-}" && -z "${README_FILE:-}" ]]; then
-        for candidate in \
-            "/opt/CyberPatriot/README.html" \
-            "/opt/cyberpatriot/README.html" \
-            "/opt/aeacus/assets/ReadMe.html" \
-            "/opt/aeacus/assets/README.html" \
-            /home/*/Desktop/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html \
-            /home/*/Desktop/*[Rr][Ee][Aa][Dd]*.html \
-            /home/*/Desktop/*.html \
-            /home/*/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html \
-            /root/Desktop/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html \
-            /root/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html; do
-            if [[ -f "$candidate" ]]; then
-                README_FILE="$candidate"
-                log_info "Auto-detected local README: $README_FILE"
-                break
+        for dt in /home/*/Desktop/*[Rr][Ee][Aa][Dd][Mm][Ee]*.desktop \
+                 /home/*/Desktop/*.desktop \
+                 /opt/CyberPatriot/*.desktop \
+                 /opt/cyberpatriot/*.desktop \
+                 /root/Desktop/*[Rr][Ee][Aa][Dd][Mm][Ee]*.desktop; do
+            if [[ -f "$dt" && "$dt" != *[Ss]coring* && "$dt" != *[Ss]core* ]]; then
+                local dt_url
+                dt_url=$(grep -i '^Exec=' "$dt" 2>/dev/null | head -n1 | sed -E 's/^Exec=.*(https?:[^"[:space:]]+).*/\1/I' || true)
+                if [[ "$dt_url" == https://* ]]; then
+                    README_URL="$dt_url"
+                    log_info "Auto-detected README URL from $dt: $README_URL"
+                    break
+                fi
+                local dt_file
+                dt_file=$(grep -i '^Exec=' "$dt" 2>/dev/null | head -n1 | sed -E 's/^Exec=[^/]*(\/[^"[:space:]]+).*/\1/' || true)
+                if [[ -f "$dt_file" && "$dt_file" != *[Ss]coring* && "$dt_file" != *[Ss]core* ]]; then
+                    README_FILE="$dt_file"
+                    log_info "Auto-detected README file from $dt: $README_FILE"
+                    break
+                fi
             fi
         done
-        if [[ -z "${README_FILE:-}" ]]; then
-            for dt in /home/*/Desktop/*.desktop /opt/CyberPatriot/*.desktop /opt/cyberpatriot/*.desktop; do
-                if [[ -f "$dt" ]]; then
-                    local dt_url
-                    dt_url=$(grep -i '^Exec=' "$dt" 2>/dev/null | head -n1 | sed -E 's/^Exec=.*(https?:[^"[:space:]]+).*/\1/I' || true)
-                    if [[ "$dt_url" == https://* ]]; then
-                        README_URL="$dt_url"
-                        log_info "Auto-detected README URL from $dt: $README_URL"
-                        break
-                    fi
+        if [[ -z "${README_URL:-}" && -z "${README_FILE:-}" ]]; then
+            for candidate in \
+                "/opt/CyberPatriot/README.html" \
+                "/opt/cyberpatriot/README.html" \
+                "/opt/aeacus/assets/ReadMe.html" \
+                "/opt/aeacus/assets/README.html" \
+                /home/*/Desktop/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html \
+                /home/*/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html \
+                /root/Desktop/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html \
+                /root/*[Rr][Ee][Aa][Dd][Mm][Ee]*.html; do
+                if [[ -f "$candidate" && "$candidate" != *[Ss]coring* && "$candidate" != *[Ss]core* ]]; then
+                    README_FILE="$candidate"
+                    log_info "Auto-detected local README: $README_FILE"
+                    break
                 fi
             done
         fi
