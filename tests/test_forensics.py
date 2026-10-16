@@ -293,5 +293,11 @@ class ForensicsTests(unittest.TestCase):
         answers = agent.supported_answers(result, evidence)
         self.assertEqual(answers, ['/bin/nc.traditional'])
 
+    def test_initial_recon_fast_solve(self):
+        recon = {'download_history_and_ips': 'http://192.9.137.137/malicious.xlsm'}
+        result = {'answers': ['192.9.137.137'], 'evidence': [{'tool_id': 'e0', 'quote': '192.9.137.137'}]}
+        answers = agent.supported_answers(result, {}, recon=recon)
+        self.assertEqual(answers, ['192.9.137.137'])
+
 
 if __name__ == '__main__': unittest.main()

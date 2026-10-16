@@ -31,26 +31,28 @@ Recommended commands for common forensics tasks:
   * Search Firefox cache2: grep -rahEo "https?://[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+[^ ]*" /home/*/snap/firefox/common/.cache/mozilla/firefox/*default*/cache2/entries/
   * Inspect Office macros: python3 -m oletools.olevba <file.xlsm> 2>/dev/null || unzip -p <file.xlsm> xl/vbaProject.bin | strings -n 6
   * Check shell history / logs: ls -la /home/*/.bash_history, /var/log/syslog, /var/log/auth.log
-- Backdoors & Unauthorized Services:
+- Backdoors & Unauthorized Persistence:
   * Check listening sockets with processes: ss -tulpn
+  * Check autostart entries: ls -la /home/*/.config/autostart/ /etc/xdg/autostart/
   * Check active cron persistence: crontab -l, cat /etc/crontab, cat /etc/cron.d/*
   * Check systemd units: systemctl list-units --type=service --state=running, ls -la /etc/systemd/system/
   * Check SUID binaries: find / -perm -4000 -type f 2>/dev/null
   * Check reverse shells or malicious scripts: grep -rn "bash -i" /etc /home /var /tmp /opt /usr/local 2>/dev/null
   * Check unauthorized executables in /tmp, /var/tmp, /dev/shm
   * Check package integrity: dpkg -V or debsums -c 2>/dev/null
+- Sabotaged Authentication Mechanisms:
+  * Check PAM configurations for unusual rules or pam_permit: grep -rn "pam_permit.so" /etc/pam.d/
+  * Check integrity of authentication packages: dpkg -V passwd sudo login libpam-modules libpam-runtime
+  * Check recently modified authentication files: ls -lt /etc/pam.d/ /bin/passwd /usr/bin/passwd /bin/su /usr/bin/su
+- Core System Directory Permissions:
+  * Check core directories that are world-writable or 777:
+    find /etc /bin /sbin /usr /var /root /boot -maxdepth 3 -type d \( -perm -002 -o -perm 0777 \) ! -path "/var/tmp*" ! -path "/var/lock*" ! -path "/var/spool*" ! -path "/var/crash*"
 - User Accounts:
   * Check /etc/passwd, /etc/shadow, /etc/group, /etc/sudoers, /etc/sudoers.d/*
 
-You can also use structured tools if desired:
-{"tool":"read_text","path":"/path","offset":0}, {"tool":"list_dir","path":"/path"},
-{"tool":"find_files","path":"/directory","pattern":"*.log"}, {"tool":"search_text","path":"/file","text":"literal text"},
-{"tool":"strings","path":"/file"}, {"tool":"sha256","path":"/file"}, {"tool":"stat","path":"/file"},
-{"tool":"processes"}, {"tool":"sockets"}, {"tool":"resolve_path","path":"/path"},
-{"tool":"file_type","path":"/file"}, {"tool":"package_owner","path":"/file"},
-{"tool":"path_info","path":"/path"}, {"tool":"sqlite_query","path":"/path.sqlite","query":"SELECT ..."},
-{"tool":"zip_list","path":"/file.xlsm"}, {"tool":"zip_read_text","path":"/file.xlsm","member":"member.xml"},
-{"tool":"zip_strings","path":"/file.xlsm","member":"xl/vbaProject.bin"}, {"tool":"vba_source","path":"/file.xlsm"}.
+FAST-SOLVE RULE:
+Pre-gathered system reconnaissance is provided in "initial_recon" in your first user message and registered as evidence record "e0".
+If the answer is already visible in "initial_recon" (e.g. download IP, backdoor path, sabotaged PAM file, or messed up directory permissions), you can solve immediately on Turn 1 by citing "tool_id": "e0" and quoting the evidence!
 
 Return ONLY JSON in one of these two forms:
 
@@ -60,7 +62,7 @@ Return ONLY JSON in one of these two forms:
 
 2. When you have established the answer:
 {"answers": ["exact answer"], "explanation": "how the evidence establishes this answer", "solved": true,
- "evidence": [{"tool_id": "e1", "quote": "exact quote from evidence"}]}
+ "evidence": [{"tool_id": "e0", "quote": "exact quote from evidence"}]}
 
 CRITICAL RULES:
 - Read and follow any special scoring instructions provided in the question or competition notes (for example, if instructed: "If your path contains /usr, remove that from your answer", format the answer without /usr).
@@ -98,11 +100,13 @@ def run_safe_command(cmd, timeout=20):
 def gather_initial_recon():
     """Gathers instant system reconnaissance to provide immediate context on turn 1."""
     recon = {}
+    # 1. Listening sockets
     try:
         res = subprocess.run(['ss', '-tulpn'], capture_output=True, timeout=5)
         recon['listening_sockets'] = res.stdout.decode('utf-8', errors='replace').strip()[:2000]
     except Exception:
         pass
+    # 2. Downloads directory contents
     try:
         downloads = []
         for d in Path('/home').glob('*/Downloads'):
@@ -112,20 +116,93 @@ def gather_initial_recon():
         recon['downloads_directory'] = '\n'.join(downloads)
     except Exception:
         pass
+    # 3. Download history & external IPs (places.sqlite + downloads strings)
     try:
-        profiles = []
-        for p in Path('/home').glob('*/snap/firefox/common/.mozilla/firefox/*.*'):
-            if p.is_dir(): profiles.append(str(p))
-        for p in Path('/home').glob('*/.mozilla/firefox/*.*'):
-            if p.is_dir(): profiles.append(str(p))
-        recon['firefox_profiles'] = profiles[:5]
+        download_leads = []
+        import sqlite3
+        for pattern in ['/home/*/.mozilla/firefox/*default*/places.sqlite', '/home/*/snap/firefox/common/.mozilla/firefox/*default*/places.sqlite']:
+            for p in glob.glob(pattern):
+                try:
+                    conn = sqlite3.connect(f'file:{p}?mode=ro', uri=True)
+                    rows = conn.execute("SELECT url FROM moz_places WHERE url LIKE '%http%' ORDER BY id DESC LIMIT 50;").fetchall()
+                    for (u,) in rows:
+                        download_leads.append(u)
+                except Exception:
+                    pass
+        for f in Path('/home').glob('*/Downloads/*'):
+            if f.is_file():
+                try:
+                    out = subprocess.run(['strings', str(f)], capture_output=True, timeout=3).stdout.decode('utf-8', errors='ignore')
+                    ips = re.findall(r'\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b', out)
+                    for ip in ips:
+                        if not ip.startswith('127.') and not ip.startswith('0.') and not ip.startswith('255.'):
+                            download_leads.append(f"{f.name} contains IP: {ip}")
+                except Exception:
+                    pass
+        if download_leads:
+            recon['download_history_and_ips'] = '\n'.join(download_leads[:30])
     except Exception:
         pass
+    # 4. Backdoor & persistence leads (autostart, suspicious executables, strings from downloads)
+    try:
+        backdoor_leads = []
+        for p in glob.glob('/home/*/.config/autostart/*') + glob.glob('/etc/xdg/autostart/*'):
+            if os.path.isfile(p):
+                backdoor_leads.append(f"Autostart desktop: {p}")
+        res = subprocess.run(['find', '/tmp', '/var/tmp', '/dev/shm', '/opt', '/usr/local/bin', '-maxdepth', '3', '-type', 'f', '(', '-perm', '-111', '-o', '-name', '*.sh', '-o', '-name', '*.py', '-o', '-name', '*.pl', ')'], capture_output=True, timeout=5)
+        for line in res.stdout.decode('utf-8', errors='ignore').splitlines():
+            if line.strip():
+                backdoor_leads.append(f"Executable lead: {line.strip()}")
+        for f in Path('/home').glob('*/Downloads/*'):
+            if f.is_file():
+                try:
+                    out = subprocess.run(['strings', str(f)], capture_output=True, timeout=3).stdout.decode('utf-8', errors='ignore')
+                    paths = re.findall(r'(/home/[a-zA-Z0-9_.-]+/[a-zA-Z0-9_./-]+|/tmp/[a-zA-Z0-9_./-]+|/etc/[a-zA-Z0-9_./-]+|/var/[a-zA-Z0-9_./-]+)', out)
+                    for path in set(paths):
+                        backdoor_leads.append(f"Path in {f.name}: {path}")
+                except Exception:
+                    pass
+        if backdoor_leads:
+            recon['backdoor_and_persistence_leads'] = '\n'.join(backdoor_leads[:30])
+    except Exception:
+        pass
+    # 5. Sabotaged authentication mechanism (PAM permit / modified auth binaries)
+    try:
+        auth_leads = []
+        res = subprocess.run(['grep', '-rn', 'pam_permit.so', '/etc/pam.d/'], capture_output=True, timeout=3)
+        for line in res.stdout.decode('utf-8', errors='ignore').splitlines():
+            if line.strip():
+                auth_leads.append(f"PAM permit line: {line.strip()}")
+        res = subprocess.run(['dpkg', '-V', 'passwd', 'sudo', 'login', 'libpam-modules', 'libpam-runtime'], capture_output=True, timeout=5)
+        for line in res.stdout.decode('utf-8', errors='ignore').splitlines():
+            if line.strip():
+                auth_leads.append(f"dpkg integrity verification: {line.strip()}")
+        res = subprocess.run(['ls', '-lt', '/etc/pam.d/'], capture_output=True, timeout=3)
+        auth_leads.append("Recent /etc/pam.d files:\n" + '\n'.join(res.stdout.decode('utf-8', errors='ignore').splitlines()[:10]))
+        if auth_leads:
+            recon['sabotaged_auth_leads'] = '\n'.join(auth_leads[:25])
+    except Exception:
+        pass
+    # 6. Core directory permission anomalies (world-writable / 777 core directories)
+    try:
+        res = subprocess.run(
+            ['find', '/etc', '/bin', '/sbin', '/usr', '/var', '/root', '/boot',
+             '-maxdepth', '3', '-type', 'd', '(', '-perm', '-002', '-o', '-perm', '0777', ')',
+             '!', '-path', '/var/tmp*', '!', '-path', '/var/lock*', '!', '-path', '/var/spool*', '!', '-path', '/var/crash*'],
+            capture_output=True, timeout=5
+        )
+        perm_lines = [l.strip() for l in res.stdout.decode('utf-8', errors='ignore').splitlines() if l.strip()]
+        if perm_lines:
+            recon['abnormal_core_directory_permissions'] = '\n'.join(perm_lines[:20])
+    except Exception:
+        pass
+    # 7. SUID binaries
     try:
         res = subprocess.run(['find', '/bin', '/usr/bin', '/sbin', '/usr/sbin', '/opt', '-perm', '-4000', '-type', 'f'], capture_output=True, timeout=5)
         recon['suid_binaries'] = res.stdout.decode('utf-8', errors='replace').strip()[:1500]
     except Exception:
         pass
+    # 8. Cron jobs
     try:
         crons = []
         for p in Path('/etc/cron.d').glob('*'):
@@ -135,6 +212,7 @@ def gather_initial_recon():
         recon['cron_jobs'] = '\n'.join(crons)[:1500]
     except Exception:
         pass
+    # 9. User accounts
     try:
         users = []
         if Path('/etc/passwd').exists():
@@ -421,7 +499,7 @@ def call_ai(messages, model=None):
         raise ValueError(f'Model JSON formatting failed: {error}. Diagnostic: {diagnostic}') from None
 
 
-def supported_answers(result, evidence):
+def supported_answers(result, evidence, recon=None):
     answers = result.get('answers')
     if not isinstance(answers, list) or not answers or len(answers) > 20:
         raise ValueError('Model did not provide a complete confident answer set')
@@ -436,11 +514,18 @@ def supported_answers(result, evidence):
         for citation in citations:
             if not isinstance(citation, dict):
                 raise ValueError('Invalid evidence citation')
-            record = evidence.get(citation.get('tool_id'))
+            tid = citation.get('tool_id')
             quote = citation.get('quote')
-            if not record or not record.get('ok') or not isinstance(quote, str) or not quote.strip() or quote not in record.get('output', ''):
-                raise ValueError('Missing or fabricated evidence citation')
-            quotes.append(quote)
+            if tid in ('e0', 'initial_recon') and recon:
+                recon_text = json.dumps(recon, ensure_ascii=False)
+                if not isinstance(quote, str) or not quote.strip() or quote not in recon_text:
+                    raise ValueError('Missing or fabricated evidence citation')
+                quotes.append(quote)
+            else:
+                record = evidence.get(tid)
+                if not record or not record.get('ok') or not isinstance(quote, str) or not quote.strip() or quote not in record.get('output', ''):
+                    raise ValueError('Missing or fabricated evidence citation')
+                quotes.append(quote)
     elif not isinstance(citations, list):
         raise ValueError('Invalid evidence citation')
 
@@ -455,10 +540,12 @@ def supported_answers(result, evidence):
             )
             if not match:
                 raise ValueError('Answer is not present in cited evidence; review derivation manually')
-    elif not evidence:
+    elif not evidence and not recon:
         raise ValueError('Model did not provide a complete confident answer set')
     else:
         all_text = ' '.join(str(rec.get('output', '')) for rec in evidence.values() if rec.get('ok'))
+        if recon:
+            all_text += ' ' + json.dumps(recon, ensure_ascii=False)
         for answer in answers:
             match = (
                 answer in all_text or
@@ -541,7 +628,7 @@ def investigate(question, tools, directory, caller=None, readme_html='', progres
 
         if result.get('answers'):
             try:
-                supported_answers(result, evidence)
+                supported_answers(result, evidence, recon=recon)
                 return {**result, 'tool_requests': [], 'commands': []}
             except ValueError:
                 pass
@@ -560,7 +647,7 @@ def investigate(question, tools, directory, caller=None, readme_html='', progres
 
         if not requests:
             try:
-                supported_answers(result, evidence)
+                supported_answers(result, evidence, recon=recon)
                 return result
             except ValueError as error:
                 signature = json.dumps(result, sort_keys=True)
@@ -613,7 +700,7 @@ def investigate(question, tools, directory, caller=None, readme_html='', progres
     if result.get('command_requests'):
         raise ValueError('AI requested unsupported shell commands')
     try:
-        supported_answers(result, evidence)
+        supported_answers(result, evidence, recon=recon)
     except ValueError as error:
         raise ValueError('Final synthesis could not establish a supported answer: ' + str(error)) from None
     return {**result, 'tool_requests': [], 'commands': []}
