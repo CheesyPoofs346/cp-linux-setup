@@ -23,7 +23,7 @@ configure_ai() {
         nvidia)
             OPENROUTER_API_URL="https://integrate.api.nvidia.com/v1/chat/completions"
             OPENROUTER_API_KEY="${NVIDIA_API_KEY:-}"
-            OPENROUTER_MODEL="${NVIDIA_MODEL:-nvidia/nemotron-3-super-120b-a12b}"
+            OPENROUTER_MODEL="${NVIDIA_MODEL:-nvidia/nemotron-3-ultra-550b-a55b}"
             ;;
         *) log_error "AI_PROVIDER must be openrouter or nvidia"; return 1 ;;
     esac
@@ -148,6 +148,10 @@ invoke_readme_extraction() {
             "max_tokens": 4000
         }')
 
+    # Extraction needs final JSON rather than spending the whole budget on reasoning.
+    if [[ "${AI_PROVIDER:-openrouter}" == nvidia && "$OPENROUTER_MODEL" == nvidia/nemotron-3-* ]]; then
+        payload=$(printf '%s' "$payload" | jq '. + {chat_template_kwargs: {enable_thinking: false}}')
+    fi
     # Make API request
     local response
     response=$(curl -sS --connect-timeout 15 --max-time "${AI_TIMEOUT_SECONDS:-180}" -X POST "$OPENROUTER_API_URL" \

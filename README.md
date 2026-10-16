@@ -55,14 +55,14 @@ In `config.local.conf`, select NVIDIA explicitly:
 ```bash
 AI_PROVIDER="nvidia"
 NVIDIA_API_KEY="paste-your-own-nvidia-key-here"
-NVIDIA_MODEL="nvidia/nemotron-3-super-120b-a12b"
+NVIDIA_MODEL="nvidia/nemotron-3-ultra-550b-a55b"
 ```
 
-Create the key using [NVIDIA's model page](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b). Its documented endpoint is used directly. There is no fallback to another provider. NVIDIA describes this as a free prototype endpoint; check your account's current limits. Live NVIDIA inference and model accuracy have not been tested here.
+Create the key using [NVIDIA's model page](https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b). Its documented endpoint is used directly. There is no fallback to another provider. NVIDIA describes this as a free prototype endpoint; check your account's current limits. Live NVIDIA inference and model accuracy have not been tested here.
 
 ### One-command mode
 
-After configuration and forensics, use either a local README or an HTTPS URL:
+After configuration, use either a local README or an HTTPS URL. The runner attempts forensics before remediation:
 
 ```bash
 sudo bash ./cp-engine.sh --auto --readme /path/to/image-README.html
@@ -73,13 +73,36 @@ sudo bash ./cp-engine.sh --auto --readme-url https://example.org/image-readme.ht
 Replace the example path/URL with your image's actual README. URLs are per-run inputs, not published image defaults. Unsupported systems are refused unless you explicitly add `--allow-unsupported` for a disposable test. This does not make Ubuntu 22.04 a fully supported platform.
 
 - Parses and independently checks explicit HTML authorized-administrator/user and critical-service lists before remediation. Missing users, changed roles, unknown formats, or additional AI account actions stop the run. A stronger model does not bypass validation.
+- Investigates forensic questions before mutating modules. If questions cannot be found, need review, or fail, remediation stops. Read the forensics section below for auto-fill limits and evidence/backup locations.
 - Starts each module in its own process to isolate its globals and readonly variables. The first nonzero module exit or timeout stops subsequent modules. Existing modules can still contain internal errors that they do not report correctly; a PASS only reflects their exit status.
 - Uses `AUTO_UPDATE_MODE=1` by default (APT configuration only). Set `AUTO_UPDATE_MODE=2` for a package upgrade within the current release. Neither option performs a distribution release upgrade.
 - Leaves AI-driven malware commands and package/file removals for manual review. These are not silently approved.
 - Leaves SSH unchanged unless you configure `SSH_TARGET_USER` and `SSH_PUBLIC_KEY_FILE` with the required public key. SSH defaults to port 22. Verify the image's authentication, forwarding, and key requirements yourself before enabling it.
-- Writes module results to `data/auto-results.tsv`: exit **0** means selected modules reported success, **1** means failure, and **2** means manual review remains. Forensics and image-specific requirements still need checking in the official scoring report.
+- Writes module results to `data/auto-results.tsv`: exit **0** means selected modules reported success, **1** means failure, and **2** means manual review remains. Filled forensic answers and image-specific requirements still need checking in the official scoring report.
 
 HTTP requests have a configurable `AI_TIMEOUT_SECONDS` limit (default 180 seconds); module processes have an `AUTO_MODULE_TIMEOUT` limit (default 1800 seconds). There are no automatic API retries that consume additional quota.
+
+### AI forensic questions
+
+Forensics uses the provider/model selected in `config.local.conf`, including NVIDIA. The current NVIDIA default is Nemotron 3 Ultra; it is a documented available free prototype endpoint, not a benchmarked claim of the best model for these tasks.
+
+To investigate forensics without starting other remediation:
+
+```bash
+sudo bash ./cp-engine.sh -m forensics_questions
+```
+
+Discovery searches user Desktops and question subfolders up to two levels deep. It recognizes multi-digit question numbers, case-insensitive `.txt` files, and extensionless files. If files are elsewhere, set `FORENSICS_DIR="/actual/question/directory"` in your private config. HTML, documents, remote links, and localized desktop directories require explicit preparation or a directory override.
+
+The AI gets bounded read-only tools for directory/file searches, text, literal searches, printable strings, SHA-256, metadata, process names, and listening sockets. No AI-written shell commands are executed. Runner files, common credential/private-key paths, symlinks, special files, and files above the read limit are excluded. These restrictions can leave some questions unresolved. Approved question/evidence content is sent to the selected external AI provider.
+
+Each question has at most six AI exchanges with at most four evidence requests per exchange; work is sequential to reduce bursts. Provider quotas and timeouts can still interrupt it. Binary reads/hashes are limited to 2 MB; output per tool is limited to 12,000 characters.
+
+`FORENSICS_APPLY_ANSWERS=1` is the default. Auto-fill requires every answer to appear verbatim in a successful tool-output quote, valid citations, the model explicitly declining manual review, and exactly as many existing `ANSWER:` placeholders as answers. Confidence alone is insufficient. Computed/transformed answers, missing placeholders, fabricated citations, or uncertain results remain manual. A valid citation still does not prove semantic correctness or scoring acceptance.
+
+Original question files are backed up before replacement, checked for intervening edits, and retain their newline style, permissions, and owner. Evidence reads request Linux no-atime access when permitted; this is not a forensic disk-image acquisition tool. Set `FORENSICS_APPLY_ANSWERS=0` for drafts only; auto remediation then pauses for review.
+
+Results, AI rounds, evidence records, and original backups are saved under `data/forensics/<run-id>/`. Review `results.json` and the official scoring report: `FILLED_UNVERIFIED_SCORE` means a file was filled, not that an answer scored. Put special image formatting rules in `FORENSICS_IMAGE_NOTES` in your private config; the tool never hardcodes a particular practice image.
 
 ### Automatic free models and usage
 
@@ -141,4 +164,4 @@ The action log is separate from official scoring. File backups do not fully undo
 - README not found: check the image README location. The parser searches standard CyberPatriot/Aeacus paths and desktop README.html files.
 - Unsupported OS: use Ubuntu 24.x or Mint 21.x for this snapshot.
 
-The source has been inspected; it has not been runtime-tested in a Linux competition image here.
+The runner has offline regression tests and mocked AI/evidence tests. Live NVIDIA inference, complete Linux-image remediation, and scoring acceptance have not been verified here.

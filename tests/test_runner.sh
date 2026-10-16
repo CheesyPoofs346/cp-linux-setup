@@ -38,13 +38,20 @@ timeout() { printf '%s\n' "${@: -1}" >> "$TEST_DIR/executed"; }
 status=0
 run_auto || status=$?
 [[ "$status" == 2 ]]
-[[ "$(wc -l < "$TEST_DIR/executed")" == 2 ]]
+[[ "$(wc -l < "$TEST_DIR/executed")" == 3 ]]
+[[ "$(head -1 "$TEST_DIR/executed")" == forensics_questions ]]
 grep -q $'malware\tMANUAL_REVIEW' "$ENGINE_DIR/data/auto-results.tsv"
 grep -q $'ssh_hardening\tMANUAL_REVIEW' "$ENGINE_DIR/data/auto-results.tsv"
-timeout() { return 124; }
+timeout() { [[ "${@: -1}" == forensics_questions ]] && return 0; return 124; }
 status=0
 run_auto || status=$?
 [[ "$status" == 1 ]]
 grep -q $'user_auditing\tFAILED' "$ENGINE_DIR/data/auto-results.tsv"
 grep -q $'account_policy\tNOT_RUN' "$ENGINE_DIR/data/auto-results.tsv"
+timeout() { return 2; }
+status=0
+run_auto || status=$?
+[[ "$status" == 2 ]]
+grep -q $'forensics_questions\tMANUAL_REVIEW' "$ENGINE_DIR/data/auto-results.tsv"
+if grep -q 'user_auditing' "$ENGINE_DIR/data/auto-results.tsv"; then echo 'FAIL: cleanup started before forensics resolved'; exit 1; fi
 echo 'PASS: API reasoning-only success/error, NVIDIA routing, failed preflight, review status, timeout stops remaining modules'

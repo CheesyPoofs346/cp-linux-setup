@@ -30,8 +30,21 @@ run_auto() {
         return 1
     fi
     printf 'readme_parser\tPASS\n' >> "$report"
+    # Forensic evidence may be destroyed by package, account, or file cleanup.
+    status=0
+    timeout --foreground --kill-after=10 "${AUTO_MODULE_TIMEOUT:-1800}" bash "$ENGINE_DIR/cp-engine.sh" --worker-module forensics_questions </dev/null || status=$?
+    if [[ "$status" == 2 ]]; then
+        printf 'forensics_questions\tMANUAL_REVIEW\n' >> "$report"
+        log_warn "Forensics are unresolved. Remediation has not started. See data/forensics/."
+        return 2
+    elif [[ "$status" != 0 ]]; then
+        printf 'forensics_questions\tFAILED\n' >> "$report"
+        log_error "Forensics failed or timed out. Remediation has not started."
+        return 1
+    fi
+    printf 'forensics_questions\tFILLED_UNVERIFIED_SCORE\n' >> "$report"
     for module in "${MODULES[@]}"; do
-        [[ "$module" == readme_parser ]] && continue
+        [[ "$module" == readme_parser || "$module" == forensics_questions ]] && continue
         if (( failed )); then
             printf '%s\tNOT_RUN\n' "$module" >> "$report"
             continue
