@@ -22,6 +22,8 @@ The second command uses your saved setup and starts the protected, independently
 
 To change the key or README, rerun `bash setup.sh`. A blank key input retains a previously saved NVIDIA key. Existing private settings are backed up to `config.local.conf.previous`; known timeout/update/forensics settings are retained. Do not share these private files.
 
+If an older engine changed module executable bits and Git refuses an update, stop the run, preserve tracked edits in a local stash, then pull. Never launch the next run after a failed update. The current engine does not chmod sourced modules. Saved keys and run settings are Git-ignored and are not included by a normal `git stash push`.
+
 ### Read-only anomaly/backdoor audit
 
 Auto mode saves an anomaly audit before forensic investigation, so the report remains available even if forensics stop the run. You can also run it independently, without an API key or remediation:

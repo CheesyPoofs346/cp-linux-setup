@@ -107,24 +107,6 @@ discover_modules() {
     return 0
 }
 
-# Ensure module scripts are executable so they can be sourced reliably
-ensure_module_permissions() {
-    if [[ ! -d "$ENGINE_DIR/modules" ]]; then
-        log_warn "Modules directory not found when ensuring permissions"
-        return
-    fi
-
-    while IFS= read -r module_script; do
-        if [[ -f "$module_script" && ! -x "$module_script" ]]; then
-            if chmod +x "$module_script"; then
-                log_debug "Set executable permission on $(basename "$module_script")"
-            else
-                log_warn "Failed to set executable permission on $module_script"
-            fi
-        fi
-    done < <(find "$ENGINE_DIR/modules" -maxdepth 1 -type f -name '*.sh')
-}
-
 # Load configuration (only API key, model, and LOG_LEVEL)
 CONFIG_FILE="$ENGINE_DIR/config.conf"
 if [[ -f "$CONFIG_FILE" ]]; then
@@ -142,8 +124,7 @@ fi
 configure_ai
 source "$ENGINE_DIR/lib/automation.sh"
 
-# Ensure module scripts are ready and build the module list dynamically
-ensure_module_permissions
+# Modules are sourced, so executable permission is unnecessary. Do not dirty Git.
 if ! discover_modules; then
     log_error "Failed to discover modules"
     exit 1
@@ -593,9 +574,6 @@ main() {
     mkdir -p "$BACKUP_DIR"
     mkdir -p "$(dirname "$SCORE_FILE")"
     mkdir -p "$ENGINE_DIR/data"
-
-    # Ensure all module scripts are executable before running them
-    ensure_module_permissions
 
     # Run based on mode
     case "$mode" in
