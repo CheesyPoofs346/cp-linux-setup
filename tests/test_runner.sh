@@ -32,6 +32,7 @@ MODULES=(readme_parser forensics_questions local_policy security_policy user_aud
 snapshot_main_account() { return 0; }
 check_guard_support() { return 0; }
 check_main_account() { return 0; }
+run_anomaly_audit() { return 0; }
 review_auto_plan() { return 0; }
 peer_approved() { return 0; }
 run_module() { return 1; }

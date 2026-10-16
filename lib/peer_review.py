@@ -88,6 +88,10 @@ def main():
     account.pop('policy_fingerprints', None)
     shared = list((engine / 'lib').glob('*.sh')) + list((engine / 'lib').glob('*.py')) + [engine / 'cp-engine.sh']
     payload = {'kind': 'module_plan', 'readme_html_full': html, 'sections': sections(html), 'parsed_readme': json.loads((engine / 'data/readme_parsed.json').read_text()), 'forensics': json.loads(runs[-1].read_text()), 'protected_account': account, 'modules': sources, 'shared_libraries': {str(p.relative_to(engine)): p.read_text() for p in shared}}
+    audit = json.loads((engine / 'data/audit/latest.json').read_text())
+    # Keep raw config snippets and inventories local; send only finding summaries.
+    payload['audit_findings'] = [{key: value for key, value in finding.items() if key in ('severity', 'rule', 'path', 'account', 'assessment')} for finding in audit['findings']]
+    payload['audit_coverage'] = audit['coverage']
     source_files = shared + [engine / 'modules' / (name + '.sh') for name in sources]
     fingerprints = {str(p.relative_to(engine)): hashlib.sha256(p.read_bytes()).hexdigest() for p in source_files}
     # Do not send password hashes or private configuration. Account snapshots contain metadata only.

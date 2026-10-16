@@ -9,6 +9,9 @@ snapshot_main_account() {
 check_main_account() {
     python3 "$ENGINE_DIR/lib/account_guard.py" check "$ENGINE_DIR/data/protected-account.json"
 }
+run_anomaly_audit() {
+    AUDIT_PACKAGE_CHECK="${1:-0}" python3 "$ENGINE_DIR/lib/anomaly_audit.py"
+}
 review_auto_plan() {
     printf '%s\n' "${MODULES[@]}" | jq -R . | jq -s '[.[] | select(. != "readme_parser" and . != "forensics_questions" and . != "user_auditing" and . != "account_policy" and . != "os_settings" and . != "ssh_hardening" and . != "malware" and . != "unwanted_software" and . != "prohibited_files")]' > "$ENGINE_DIR/data/review-proposal.json"
     export AI_PROVIDER OPENROUTER_API_KEY OPENROUTER_MODEL
@@ -53,6 +56,11 @@ run_auto() {
     fi
     printf 'readme_parser\tPASS\n' >> "$report"
     snapshot_main_account || return 1
+    if ! run_anomaly_audit; then
+        printf 'anomaly_audit\tFAILED\n' >> "$report"
+        return 1
+    fi
+    printf 'anomaly_audit\tREPORT_SAVED\n' >> "$report"
     # Forensic evidence may be destroyed by package, account, or file cleanup.
     status=0
     timeout --foreground --kill-after=10 "${AUTO_MODULE_TIMEOUT:-1800}" bash "$ENGINE_DIR/cp-engine.sh" --worker-module forensics_questions </dev/null || status=$?
@@ -67,6 +75,8 @@ run_auto() {
     fi
     printf 'forensics_questions\tFILLED_UNVERIFIED_SCORE\n' >> "$report"
     check_main_account || return 1
+    # Broad package file reads happen only after forensic answers are collected.
+    run_anomaly_audit 1 || return 1
     if ! review_auto_plan; then
         printf 'peer_review\tMANUAL_REVIEW\n' >> "$report"
         log_warn "Independent plan review did not approve remediation. No remediation modules started."

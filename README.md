@@ -22,6 +22,22 @@ The second command uses your saved setup and starts the protected, independently
 
 To change the key or README, rerun `bash setup.sh`. A blank key input retains a previously saved NVIDIA key. Existing private settings are backed up to `config.local.conf.previous`; known timeout/update/forensics settings are retained. Do not share these private files.
 
+### Read-only anomaly/backdoor audit
+
+Auto mode saves an anomaly audit before forensic investigation, so the report remains available even if forensics stop the run. You can also run it independently, without an API key or remediation:
+
+```bash
+sudo bash audit.sh
+```
+
+Reports are saved in `data/audit/<run-id>/report.txt` and `report.json`, with `data/audit/latest.json` for the latest machine-readable report. Checks cover extra UID-0 accounts, accounts absent from a validated README, login-enabled system users, cron/systemd/autostart/shell persistence indicators, world-writable access/startup configs, library preloads, passwordless-sudo indicators, authorized-key inventories, unusual set-ID locations, temporary executables, deleted running executables, listening sockets, process names, services, timers, and a bounded `dpkg -V` package-integrity snapshot.
+
+Findings mean **investigate this**, not **confirmed malware**. Legitimate installers, package updates, and required services can produce indicators. Nothing is deleted, disabled, quarantined, or permission-changed by the audit. The independent reviewer receives finding summaries alongside the README; raw config excerpts and command inventories remain local.
+
+Auto mode defers the broad package-integrity scan until forensics finish, then refreshes the report before peer review. Standalone `audit.sh` also defers it by default; after preserving forensic evidence, use `sudo bash audit.sh --package-check` to include it. Ordinary package reads can affect access-time evidence.
+
+This is a bounded heuristic audit, not an exhaustive compromise assessment. File walks stop after 20 seconds/20,000 entries; config reads, command outputs, and command runtimes are limited. Reports include skipped/error/partial-coverage notes. Private keys/password hashes are not collected, but local snippets may contain other sensitive information—do not upload whole reports publicly.
+
 Based on [gobbler56/cp-linux-auto](https://github.com/gobbler56/cp-linux-auto), snapshot `4c51f0d`, with an updated runner, README validation, NVIDIA support, and setup instructions. This is an independent repository. Original documentation is in [docs/UPSTREAM_README.md](docs/UPSTREAM_README.md); its behavior descriptions may differ from this updated runner.
 
 Targets **Ubuntu 24.x** and **Linux Mint 21.x**. Run these commands inside the Linux VM.
