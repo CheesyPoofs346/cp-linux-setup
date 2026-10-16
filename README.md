@@ -2,6 +2,26 @@
 
 Short link to this repository: [bit.ly/cp-linx](https://bit.ly/cp-linx) (also [bit.ly/4eA37uw](https://bit.ly/4eA37uw)).
 
+## Quick setup: two commands
+
+Once downloaded, open Terminal in this repository folder as your normal user:
+
+```bash
+bash setup.sh
+```
+
+It asks for your NVIDIA API key with hidden input, the image README URL/local HTML file, and an optional forensic-question directory. It offers to install missing prerequisites, and asks explicitly before allowing an unsupported-OS experiment. Worker/reviewer models are preset. The setup saves private, Git-ignored files with mode 600; it does not start remediation.
+
+Then take a VM snapshot and run:
+
+```bash
+sudo bash start.sh
+```
+
+The second command uses your saved setup and starts the protected, independently reviewed pipeline. Run it from the same normal account used for setup. Your OS may ask for your sudo password. All review/protection stops and manual-review limits below still apply. Missing questions, unsupported requirements, or rejected reviews do not become automatic success.
+
+To change the key or README, rerun `bash setup.sh`. A blank key input retains a previously saved NVIDIA key. Existing private settings are backed up to `config.local.conf.previous`; known timeout/update/forensics settings are retained. Do not share these private files.
+
 Based on [gobbler56/cp-linux-auto](https://github.com/gobbler56/cp-linux-auto), snapshot `4c51f0d`, with an updated runner, README validation, NVIDIA support, and setup instructions. This is an independent repository. Original documentation is in [docs/UPSTREAM_README.md](docs/UPSTREAM_README.md); its behavior descriptions may differ from this updated runner.
 
 Targets **Ubuntu 24.x** and **Linux Mint 21.x**. Run these commands inside the Linux VM.
