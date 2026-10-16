@@ -147,6 +147,49 @@ def discover(directories):
     return sorted(questions, key=lambda q: (q['number'], q['path']))
 
 
+def decode_model_json(content):
+    text = content.lstrip('\ufeff').strip()
+    # Reasoning is not a tool request or an answer. Never extract JSON from it.
+    text = re.sub(r'<think\b[^>]*>.*?</think\s*>', '', text, flags=re.S | re.I).strip()
+    if re.search(r'<think\b', text, flags=re.I):
+        raise ValueError('Unfinished model reasoning; no final JSON available')
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        decoder = json.JSONDecoder()
+        objects = []
+        index = 0
+        while index < len(text):
+            if text[index] not in '{[':
+                index += 1
+                continue
+            try:
+                candidate, length = decoder.raw_decode(text[index:])
+            except json.JSONDecodeError:
+                # Do not salvage a nested fragment from a truncated outer object.
+                raise ValueError('Malformed or truncated JSON in model output') from None
+            objects.append(candidate)
+            index += length
+        if len(objects) != 1:
+            raise ValueError('Expected one unambiguous JSON object in model output')
+        value = objects[0]
+    if not isinstance(value, dict):
+        raise ValueError('Model response must be a JSON object')
+    return value
+
+
+def save_ai_diagnostic(stage, model, content, key):
+    directory = Path(__file__).resolve().parents[1] / 'data' / 'ai-responses'
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path = directory / f'{time.time_ns()}-{stage}.json'
+    # Save response data only; never request authorization headers.
+    value = {'stage': stage, 'model': model, 'response': content.replace(key, '[REDACTED]')}
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, 'w', encoding='utf-8') as file:
+        json.dump(value, file, ensure_ascii=False, indent=2)
+    return path
+
+
 def call_ai(messages, model=None):
     # Values come from the runner's private config, never from question/tool data.
     provider = os.environ.get('AI_PROVIDER', 'openrouter')
@@ -157,24 +200,37 @@ def call_ai(messages, model=None):
     if not key:
         raise ValueError('Selected provider API key is missing')
     payload = {'model': model or os.environ['OPENROUTER_MODEL'], 'messages': messages, 'temperature': 0.1, 'max_tokens': 16384}
+    if provider == 'nvidia' and payload['model'].startswith('z-ai/glm-'):
+        payload['response_format'] = {'type': 'json_object'}
     if provider == 'nvidia' and payload['model'].startswith('nvidia/nemotron-3-'):
         payload['chat_template_kwargs'] = {'enable_thinking': True}
     request = urllib.request.Request(endpoint, data=json.dumps(payload).encode(), headers={'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'})
     try:
         with urllib.request.urlopen(request, timeout=int(os.environ.get('AI_TIMEOUT_SECONDS', '180'))) as response:
-            result = json.loads(response.read(2_000_000))
+            raw = response.read(2_000_000)
     except urllib.error.HTTPError as error:
         raise ValueError(f'AI HTTP {error.code}; check provider access/quota') from None
-    content = result.get('choices', [{}])[0].get('message', {}).get('content')
+    try:
+        result = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        diagnostic = save_ai_diagnostic('http-body', payload['model'], raw.decode('utf-8', errors='replace'), key)
+        raise ValueError(f'Provider HTTP body was not JSON; private diagnostic: {diagnostic}') from None
+    choices = result.get('choices') if isinstance(result, dict) else None
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        raise ValueError('Provider response has no valid choices; check provider access/quota')
+    message = choices[0].get('message')
+    if not isinstance(message, dict):
+        raise ValueError('Provider response has no valid assistant message')
+    content = message.get('content')
     if not isinstance(content, str) or not content.strip():
         raise ValueError('Model returned no final text')
-    text = content.strip()
-    if text.startswith('```'):
-        text = re.sub(r'^```(?:json)?\s*|\s*```$', '', text)
-    value = json.loads(text)
-    if not isinstance(value, dict):
-        raise ValueError('Model response must be an object')
-    return value
+    diagnostic = save_ai_diagnostic('model-content', payload['model'], content, key)
+    if choices[0].get('finish_reason') == 'length':
+        raise ValueError(f'Model exhausted output budget; refusing partial answer. Private diagnostic: {diagnostic}')
+    try:
+        return decode_model_json(content)
+    except ValueError as error:
+        raise ValueError(f'Model JSON formatting failed: {error}. Private diagnostic: {diagnostic}') from None
 
 
 def supported_answers(result, evidence):

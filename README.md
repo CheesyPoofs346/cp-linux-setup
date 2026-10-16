@@ -130,6 +130,8 @@ Original question files are backed up before replacement, checked for intervenin
 
 Results, AI rounds, reviewer decisions, evidence records, and original backups are saved under `data/forensics/<run-id>/`. Review `results.json` and the official scoring report: `FILLED_UNVERIFIED_SCORE` means a file was filled, not that an answer scored. Put special image formatting rules in `FORENSICS_IMAGE_NOTES` in your private config; the tool never hardcodes a particular practice image.
 
+GLM requests use JSON-object output mode. The parser accepts one complete JSON object wrapped in explanatory text/fences and excludes completed reasoning blocks. Ambiguous, malformed, truncated, or output-budget-exhausted responses are rejected. Private raw response diagnostics are saved with mode 600 under `data/ai-responses/`; request authorization headers are never saved. These files can contain forensic evidence, so do not publish them wholesale.
+
 Live access check on October 16, 2026: the configured key received final text from GLM Flash and Nemotron 3 Super. Nemotron Ultra returned HTTP 404 despite its catalog page showing available, so it is not the reviewer default. These small connectivity probes do not validate reasoning accuracy or full image behavior. The key is not included in this repository.
 
 ### Optional OpenRouter for standalone modules
