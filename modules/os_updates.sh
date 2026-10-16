@@ -371,7 +371,14 @@ run_os_updates() {
     log_section "Choose Update Mode"
     log_info "1) Fix APT and configure automatic updates"
     log_info "2) Full run (includes full upgrade) [default]"
-    read -r -p "Select update mode [1/2]: " update_choice
+    local update_choice
+    if [[ "${CP_AUTO:-0}" == 1 ]]; then
+        update_choice="${AUTO_UPDATE_MODE:-1}"
+        [[ "$update_choice" == 1 || "$update_choice" == 2 ]] || { log_error "AUTO_UPDATE_MODE must be 1 or 2"; return 1; }
+        export DEBIAN_FRONTEND=noninteractive
+    else
+        read -r -p "Select update mode [1/2]: " update_choice
+    fi
 
     # Default to option 2 (full run) if no choice provided
     if [[ -z "$update_choice" ]]; then

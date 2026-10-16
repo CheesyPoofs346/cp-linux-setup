@@ -135,6 +135,13 @@ else
     log_warn "Using default settings"
 fi
 
+# Optional private overrides survive git pulls; keep API keys out of tracked config.
+if [[ -f "$ENGINE_DIR/config.local.conf" ]]; then
+    source "$ENGINE_DIR/config.local.conf"
+fi
+configure_ai
+source "$ENGINE_DIR/lib/automation.sh"
+
 # Ensure module scripts are ready and build the module list dynamically
 ensure_module_permissions
 if ! discover_modules; then
@@ -168,6 +175,11 @@ check_system() {
     if ! is_supported_os; then
         log_warn "This OS may not be fully supported"
         log_warn "Supported: Linux Mint 21.x, Ubuntu 24.x"
+        if [[ "${CP_AUTO:-0}" == 1 ]]; then
+            [[ "${ALLOW_UNSUPPORTED:-0}" == 1 ]] && return 0
+            log_error "Auto mode refuses this OS. --allow-unsupported is for disposable tests only."
+            return 1
+        fi
         read -p "Continue anyway? (y/N): " -n 1 -r
         echo
         if [[ ! $REPLY =~ ^[Yy]$ ]]; then
@@ -262,7 +274,7 @@ update_locate_database() {
 check_deps() {
     log_section "Dependency Check"
 
-    local required_deps=("sed" "awk" "grep")
+    local required_deps=("sed" "awk" "grep" "curl" "jq" "python3")
     local optional_deps=("clamav" "rkhunter" "lynis")
 
     log_info "Checking required dependencies..."
@@ -387,6 +399,8 @@ run_all_modules() {
             successful_modules+=("$module")
         else
             failed_modules+=("$module")
+            log_error "Stopping: $module failed; later modules were not run"
+            break
         fi
     done
 
@@ -401,6 +415,7 @@ run_all_modules() {
         for module in "${failed_modules[@]}"; do
             log_error "  ✗ $module"
         done
+        return 1
     fi
 }
 
@@ -465,6 +480,10 @@ Options:
   -l, --list              List available modules
   -t, --test              Test OpenRouter API connection
   -c, --check             Check system and dependencies only
+  --auto                 Noninteractive run; exits 2 when manual review remains
+  --readme FILE          Use a local image README HTML file
+  --readme-url HTTPS_URL Download an image README for this run
+  --allow-unsupported    Permit an unsupported OS in a disposable auto test
 
 Modules:
 $(for module in "${MODULES[@]}"; do echo "  - $module"; done)
@@ -488,6 +507,17 @@ main() {
     # Parse arguments
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --auto) mode="auto"; CP_AUTO=1; shift ;;
+            --allow-unsupported) ALLOW_UNSUPPORTED=1; shift ;;
+            --readme|--readme-url|--worker-module)
+                [[ $# -ge 2 && -n "$2" ]] || { log_error "Missing value for $1"; return 1; }
+                case "$1" in
+                    --readme) README_FILE=$(readlink -f "$2") ;;
+                    --readme-url) README_URL="$2" ;;
+                    --worker-module) mode="worker"; selected_module="$2" ;;
+                esac
+                shift 2
+                ;;
             -h|--help)
                 show_usage
                 exit 0
@@ -531,6 +561,11 @@ main() {
         esac
     done
 
+    if [[ "$mode" == worker ]]; then
+        run_worker_module "$selected_module"
+        return $?
+    fi
+
     # Show banner
     show_banner
 
@@ -538,10 +573,15 @@ main() {
     require_root
 
     # Check system
-    check_system
+    check_system || return 1
 
-    # Repair APT sources early to ensure package operations succeed
-    repair_apt_sources
+    if [[ "$mode" == auto ]]; then
+        check_dependencies curl jq python3 flock timeout || return 1
+        run_auto
+        return $?
+    fi
+
+    # Preserve image-specific repositories. APT repairs belong to the update module.
 
     # Update locate database for forensics module
     update_locate_database
@@ -576,4 +616,6 @@ main() {
 }
 
 # Run main function
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

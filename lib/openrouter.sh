@@ -13,8 +13,22 @@ source "$(dirname "${BASH_SOURCE[0]}")/utils.sh"
 
 # OpenRouter API configuration
 OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}"
-OPENROUTER_API_URL="https://openrouter.ai/api/v1/chat/completions"
-OPENROUTER_MODEL="${OPENROUTER_MODEL:-anthropic/claude-3.5-sonnet}"
+OPENROUTER_API_URL="${OPENROUTER_API_URL:-https://openrouter.ai/api/v1/chat/completions}"
+OPENROUTER_MODEL="${OPENROUTER_MODEL:-openrouter/free}"
+
+# Configure after config.conf is loaded. Keep compatibility names for existing modules.
+configure_ai() {
+    case "${AI_PROVIDER:-openrouter}" in
+        openrouter) OPENROUTER_API_URL="https://openrouter.ai/api/v1/chat/completions" ;;
+        nvidia)
+            OPENROUTER_API_URL="https://integrate.api.nvidia.com/v1/chat/completions"
+            OPENROUTER_API_KEY="${NVIDIA_API_KEY:-}"
+            OPENROUTER_MODEL="${NVIDIA_MODEL:-nvidia/nemotron-3-super-120b-a12b}"
+            ;;
+        *) log_error "AI_PROVIDER must be openrouter or nvidia"; return 1 ;;
+    esac
+    [[ "${AI_TIMEOUT_SECONDS:-180}" =~ ^[1-9][0-9]*$ ]] || { log_error "Invalid AI_TIMEOUT_SECONDS"; return 1; }
+}
 
 # System prompt for README extraction (adapted from PowerShell version)
 # Use a heredoc to populate SYSTEM_PROMPT. read -d '' returns 1 at EOF when
@@ -64,8 +78,8 @@ EOF
 # Check if API key is configured
 check_openrouter_config() {
     if [[ -z "$OPENROUTER_API_KEY" ]]; then
-        log_error "OpenRouter API key not configured"
-        log_info "Set OPENROUTER_API_KEY environment variable or in config.conf"
+        log_error "${AI_PROVIDER:-openrouter} API key not configured"
+        log_info "Set the selected provider's API key in config.local.conf"
         return 1
     fi
     return 0
@@ -135,23 +149,22 @@ invoke_readme_extraction() {
         }')
 
     # Make API request
-    local response=$(curl -s -X POST "$OPENROUTER_API_URL" \
+    local response
+    response=$(curl -sS --connect-timeout 15 --max-time "${AI_TIMEOUT_SECONDS:-180}" -X POST "$OPENROUTER_API_URL" \
         -H "Authorization: Bearer $OPENROUTER_API_KEY" \
         -H "Content-Type: application/json" \
         -H "HTTP-Referer: https://github.com/cyberpatriot-linux-auto" \
-        -d "$payload")
-
-    if [[ $? -ne 0 ]]; then
+        -d "$payload") || {
         log_error "Failed to call OpenRouter API"
         return 1
-    fi
+    }
 
     # Extract the content from response
     local content=$(echo "$response" | jq -r '.choices[0].message.content' 2>/dev/null)
 
     if [[ -z "$content" || "$content" == "null" ]]; then
         log_error "Failed to parse OpenRouter API response"
-        log_debug "Response: $response"
+        log_error "$(echo "$response" | jq -r '.error.message // "No final text returned; model may have exhausted its token budget"' 2>/dev/null)"
         return 1
     fi
 
@@ -214,7 +227,7 @@ test_openrouter() {
         return 1
     fi
 
-    log_info "Testing OpenRouter API connection..."
+    log_info "Testing ${AI_PROVIDER:-openrouter} API connection..."
 
     local test_payload=$(jq -n \
         --arg model "$OPENROUTER_MODEL" \
@@ -226,20 +239,24 @@ test_openrouter() {
                     "content": "Say hello"
                 }
             ],
-            "max_tokens": 10
+            "max_tokens": 2048
         }')
 
-    local response=$(curl -s -X POST "$OPENROUTER_API_URL" \
+    local response
+    response=$(curl -sS --connect-timeout 15 --max-time "${AI_TIMEOUT_SECONDS:-180}" -X POST "$OPENROUTER_API_URL" \
         -H "Authorization: Bearer $OPENROUTER_API_KEY" \
         -H "Content-Type: application/json" \
-        -d "$test_payload")
+        -d "$test_payload") || { log_error "AI request failed or timed out"; return 1; }
 
-    if echo "$response" | jq -e '.choices[0].message.content' >/dev/null 2>&1; then
-        log_success "OpenRouter API connection successful"
+    if echo "$response" | jq -e '.choices[0].message' >/dev/null 2>&1; then
+        log_success "${AI_PROVIDER:-openrouter} API connection successful (model: $OPENROUTER_MODEL)"
+        if ! echo "$response" | jq -e '.choices[0].message.content | strings | select(length > 0)' >/dev/null 2>&1; then
+            log_warn "Connection works, but this test returned no final text. Extraction may need a different model/token budget."
+        fi
         return 0
     else
-        log_error "OpenRouter API connection failed"
-        log_debug "Response: $response"
+        log_error "${AI_PROVIDER:-openrouter} API connection failed"
+        log_error "$(echo "$response" | jq -r '.error.message // "Invalid API response"' 2>/dev/null)"
         return 1
     fi
 }

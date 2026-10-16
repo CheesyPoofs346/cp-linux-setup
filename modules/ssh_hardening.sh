@@ -10,12 +10,12 @@ source "$SCRIPT_DIR/../lib/utils.sh"
 # Description: Hardens SSH configuration, permissions, and firewall rules
 
 # ====== EDITABLE DEFAULTS ======
-readonly SSH_PORT="${SSH_PORT:-222}"               # Custom SSH port
+readonly SSH_PORT="${SSH_PORT:-22}"                # Preserve standard SSH port by default
 readonly SSH_KEEP_22="${SSH_KEEP_22:-yes}"         # Keep port 22 allowed in UFW
 readonly SSH_DO_UFW="${SSH_DO_UFW:-yes}"           # Configure UFW firewall
 readonly SSH_DO_MODULI="${SSH_DO_MODULI:-yes}"     # Prune weak moduli
 readonly SSH_BANNER_TEXT="${SSH_BANNER_TEXT:-Authorized use only. Activity may be monitored and reported.}"
-readonly SSH_TARGET_USER="${SUDO_USER:-${USER:-root}}"  # User for SSH key setup
+readonly SSH_TARGET_USER="${SSH_TARGET_USER:-${SUDO_USER:-${USER:-root}}}"  # User for SSH key setup
 readonly SSH_PUBLIC_KEY="${SSH_PUBLIC_KEY:-}"      # Optional public key to install
 readonly SSH_ALLOW_USERS="${SSH_ALLOW_USERS:-}"    # Optional: space-separated list
 readonly SSH_CONFIG_NAME="${SSH_CONFIG_NAME:-99-cyberpatriot.conf}"

@@ -87,7 +87,7 @@ download_readme_from_desktop() {
 
 # Read and parse README file
 parse_readme() {
-    local readme_path="${1:-}"
+    local readme_path="${1:-${README_FILE:-}}"
     local cleanup_download=""
 
     README_PARSED=0
@@ -132,9 +132,8 @@ parse_readme() {
 
     # Use OpenRouter to extract structured information
     log_info "Extracting structured information using AI..."
-    local ai_response=$(invoke_readme_extraction "$plain_text" "$readme_path")
-
-    if [[ $? -ne 0 ]]; then
+    local ai_response
+    if ! ai_response=$(invoke_readme_extraction "$plain_text" "$readme_path"); then
         log_error "Failed to extract README information"
         return 1
     fi
@@ -146,9 +145,8 @@ parse_readme() {
     echo "$ai_response" > "$SCRIPT_DIR/../data/readme_ai_response.txt"
 
     # Extract and validate JSON
-    local json_data=$(extract_json_from_response "$ai_response")
-
-    if [[ $? -ne 0 ]]; then
+    local json_data
+    if ! json_data=$(extract_json_from_response "$ai_response"); then
         log_error "Failed to extract JSON from AI response"
         return 1
     fi
@@ -158,6 +156,17 @@ parse_readme() {
         log_error "Invalid JSON structure in AI response"
         return 1
     fi
+
+    # Never authorize account changes from an unchecked AI response.
+    local validation_file
+    validation_file=$(mktemp)
+    printf '%s\n' "$json_data" > "$validation_file"
+    if ! python3 "$SCRIPT_DIR/../lib/validate_readme.py" "$readme_path" "$validation_file"; then
+        rm -f -- "$validation_file"
+        return 1
+    fi
+    rm -f -- "$validation_file"
+    README_SOURCE="$readme_path"
 
     # Save parsed JSON
     echo "$json_data" | jq '.' > "$SCRIPT_DIR/../data/readme_parsed.json"

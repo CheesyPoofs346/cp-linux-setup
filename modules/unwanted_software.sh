@@ -288,7 +288,7 @@ invoke_unwanted_package_analysis() {
             "max_tokens": 12000
         }')
 
-    local response=$(curl -s -X POST "$OPENROUTER_API_URL" \
+    local response=$(curl -sS --connect-timeout 15 --max-time "${AI_TIMEOUT_SECONDS:-180}" -X POST "$OPENROUTER_API_URL" \
         -H "Authorization: Bearer $OPENROUTER_API_KEY" \
         -H "Content-Type: application/json" \
         -H "HTTP-Referer: https://github.com/cyberpatriot-linux-auto" \

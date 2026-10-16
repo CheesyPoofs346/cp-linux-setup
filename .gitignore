@@ -2,3 +2,6 @@ data/
 *.log
 .env
 .env.*
+__pycache__/
+*.pyc
+config.local.conf
