@@ -30,11 +30,10 @@ Create an API key at [OpenRouter](https://openrouter.ai/settings/keys), then:
 nano config.conf
 ```
 
-Set these lines:
+The free-model router is already configured. **Only paste your API key** into this line; leave the model setting alone:
 
 ```bash
 OPENROUTER_API_KEY="paste-your-own-key-here"
-OPENROUTER_MODEL="openrouter/free"
 ```
 
 Save with **Ctrl+O**, **Enter**, then exit with **Ctrl+X**.
@@ -43,7 +42,23 @@ Save with **Ctrl+O**, **Enter**, then exit with **Ctrl+X**.
 chmod 600 config.conf
 ```
 
-Never upload your populated config or share the key. The free router selects an available free model; usage limits and availability vary.
+Never upload your populated config or share the key.
+
+### Automatic free models and usage
+
+The default `OPENROUTER_MODEL="openrouter/free"` automatically selects from available free models, filtering for supported request features. You do not need to choose a model. Selection is random within eligible models, so this does not guarantee the strongest model or consistent quality. Always verify parsed users and services before remediation. See [the free router documentation](https://openrouter.ai/openrouter/free).
+
+According to [OpenRouter pricing](https://openrouter.ai/pricing), checked October 16, 2026:
+
+| Account | Free-model request limit |
+| --- | --- |
+| No credit purchase required | 50 requests/day |
+| At least $10 in credits purchased | 1,000 requests/day |
+| Both | Up to 20 requests/minute |
+
+These limits are shared across free models. Switching models or creating another API key on the same account does not increase the daily quota. Provider capacity can also limit availability. Buying credits is optional; requests to this free router have zero model inference cost. Do not replace it with `openrouter/auto`, which can select paid models.
+
+If you hit a usage limit, wait for quota availability rather than repeatedly rerunning modules. The API test also makes a request. This repository has not benchmarked free-model accuracy or tested the router on a competition image.
 
 ## 3. Check setup
 
