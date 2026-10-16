@@ -2,14 +2,21 @@
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
-# If private setup hasn't been generated yet, bootstrap from config.conf if key is set
+# If private setup hasn't been generated yet, bootstrap from environment or config.conf
 if [[ ! -f "$ROOT/config.local.conf" || ! -f "$ROOT/run.local.conf" ]]; then
-    if [[ -f "$ROOT/config.conf" ]]; then
-        source "$ROOT/config.conf"
-        if [[ -n "${NVIDIA_API_KEY:-}" ]]; then
-            cp "$ROOT/config.conf" "$ROOT/config.local.conf"
-            printf 'IMAGE_README=""\nRUN_ALLOW_UNSUPPORTED=1\nRUN_SETUP_USER="%s"\n' "${SUDO_USER:-root}" > "$ROOT/run.local.conf"
-        fi
+    local_key="${NVIDIA_API_KEY:-}"
+    if [[ -z "$local_key" && -f "$ROOT/config.conf" ]]; then
+        local_key=$(grep -E '^[[:space:]]*NVIDIA_API_KEY=' "$ROOT/config.conf" | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d ' ' || true)
+    fi
+    if [[ -n "$local_key" ]]; then
+        {
+            printf 'AI_PROVIDER=nvidia\nNVIDIA_MODEL=z-ai/glm-5.3-flash\nREVIEWER_MODEL=nvidia/nemotron-3-super-120b-a12b\n'
+            printf 'NVIDIA_API_KEY=%q\n' "$local_key"
+            printf 'FORENSICS_DIR=""\nFORENSICS_IMAGE_NOTES=""\nFORENSICS_APPLY_ANSWERS=1\nFORENSICS_MAX_ROUNDS=12\n'
+            printf 'AI_TIMEOUT_SECONDS=180\nAUTO_MODULE_TIMEOUT=1800\nAUTO_UPDATE_MODE=1\nAUTO_REMEDIATE=1\n'
+        } > "$ROOT/config.local.conf"
+        printf 'IMAGE_README=""\nRUN_ALLOW_UNSUPPORTED=1\nRUN_SETUP_USER="%s"\n' "${SUDO_USER:-root}" > "$ROOT/run.local.conf"
+        chmod 600 "$ROOT/config.local.conf" "$ROOT/run.local.conf"
     fi
 fi
 
