@@ -14,6 +14,7 @@ run_forensics_questions() {
     export FORENSICS_IMAGE_NOTES="${FORENSICS_IMAGE_NOTES:-}"
     export REVIEWER_MODEL="${REVIEWER_MODEL:-nvidia/nemotron-3-super-120b-a12b}"
     export README_FILE="${README_FILE:-}"
+    export FORENSICS_MAX_ROUNDS="${FORENSICS_MAX_ROUNDS:-12}"
     python3 "$SCRIPT_DIR/../lib/forensics_agent.py"
 }
 export -f run_forensics_questions

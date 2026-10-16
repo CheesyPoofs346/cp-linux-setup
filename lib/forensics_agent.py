@@ -23,6 +23,8 @@ Use ONLY these structured tools in tool_requests (max 4 per response):
 {"tool":"search_text","path":"/file","text":"literal text"},
 {"tool":"strings","path":"/file"}, {"tool":"sha256","path":"/file"},
 {"tool":"stat","path":"/file"}, {"tool":"processes"}, {"tool":"sockets"}.
+Also available: {"tool":"resolve_path","path":"/bin/file"},
+{"tool":"file_type","path":"/file"}, {"tool":"package_owner","path":"/file"}.
 No shell commands, pipes, scripts, network requests, or write tools exist.
 Return JSON: {"tool_requests":[],"answers":["exact answer"],
 "evidence":[{"tool_id":"e1","quote":"exact substring of successful tool output"}],
@@ -31,6 +33,9 @@ Initially request evidence; do not infer answers from the question alone. Every 
 must appear verbatim in a cited quote. If an answer needs calculation or transformation,
 provide it as a manual-review draft. Follow question formatting, but flag uncertainty.
 If tools cannot establish the answer, set needs_manual_review=true. Never invent evidence.
+Include an explanation of what you established and specific remaining leads, clearly
+separating hypotheses from evidence. Follow multi-step clues by reading tool outputs
+and requesting the next tool; do not stop merely because one search returned nothing.
 Respect any image-specific answer-format notes supplied with the question.'''
 
 
@@ -74,12 +79,21 @@ class EvidenceTools:
         if not isinstance(request, dict) or 'command' in request:
             raise ValueError('Shell commands are not supported')
         tool = request.get('tool')
+        if tool == 'resolve_path':
+            value = request.get('path')
+            if not isinstance(value, str) or not Path(value).is_absolute():
+                raise ValueError('An absolute path is required')
+            return str(self.path(str(Path(value).resolve(strict=True))))
         if tool in ('processes', 'sockets'):
             # Deliberately exclude command-line arguments, which can contain API keys.
             args = ['ps', '-eo', 'pid,ppid,user,comm'] if tool == 'processes' else ['ss', '-lntu']
             result = subprocess.run(args, capture_output=True, timeout=10, check=True)
             return result.stdout[:LIMIT].decode('utf-8', errors='replace')
         path = self.path(request.get('path'))
+        if tool in ('file_type', 'package_owner'):
+            args = ['file', '--brief', '--', str(path)] if tool == 'file_type' else ['dpkg-query', '-S', '--', str(path)]
+            result = subprocess.run(args, capture_output=True, timeout=10, check=True)
+            return result.stdout[:LIMIT].decode('utf-8', errors='replace')
         if tool == 'list_dir':
             names = sorted(p.name for p in path.iterdir())[:300]
             return '\n'.join(names)[:LIMIT]
@@ -300,7 +314,11 @@ def investigate(question, tools, directory, caller=None, readme_html=''):
     caller = caller or call_ai
     messages = [{'role': 'system', 'content': PROMPT}, {'role': 'user', 'content': json.dumps({'question': question, 'readme_html_full': readme_html, 'image_notes': os.environ.get('FORENSICS_IMAGE_NOTES', '')})}]
     evidence = {}
-    for round_number in range(1, 7):
+    rounds = int(os.environ.get('FORENSICS_MAX_ROUNDS', '12'))
+    if not 1 <= rounds <= 24:
+        raise ValueError('FORENSICS_MAX_ROUNDS must be between 1 and 24')
+    rejected = {}
+    for round_number in range(1, rounds + 1):
         result = caller(messages)
         (directory / f'{question["id"]}-round{round_number}.json').write_text(json.dumps(result, indent=2), encoding='utf-8')
         if result.get('command_requests') or result.get('command_request'):
@@ -309,8 +327,16 @@ def investigate(question, tools, directory, caller=None, readme_html=''):
         if not isinstance(requests, list) or len(requests) > 4:
             raise ValueError('Invalid or excessive evidence requests')
         if not requests:
-            supported_answers(result, evidence)
-            return result
+            try:
+                supported_answers(result, evidence)
+                return result
+            except ValueError as error:
+                signature = json.dumps(result, sort_keys=True)
+                rejected[signature] = rejected.get(signature, 0) + 1
+                if round_number == rounds or rejected[signature] >= 2:
+                    raise ValueError(str(error) + '; investigation stopped without a supported final answer') from None
+                messages.extend([{'role': 'assistant', 'content': json.dumps(result)}, {'role': 'user', 'content': json.dumps({'validation_feedback': str(error), 'instruction': 'Continue investigating using the evidence tools, or correct citations/answer format using actual evidence. Do not guess. If unresolved, explain the specific remaining leads.'})}])
+                continue
         outputs = []
         for request in requests:
             identity = 'e' + str(len(evidence) + 1)
@@ -323,6 +349,34 @@ def investigate(question, tools, directory, caller=None, readme_html=''):
         (directory / f'{question["id"]}-evidence.json').write_text(json.dumps(evidence, indent=2), encoding='utf-8')
         messages.extend([{'role': 'assistant', 'content': json.dumps(result)}, {'role': 'user', 'content': json.dumps({'evidence_results': outputs})}])
     raise ValueError('Evidence round budget exhausted')
+
+
+def investigation_leads(question, directory):
+    """Preserve partial work; only actual collected tool paths become evidence leads."""
+    value = {'partial_answers': [], 'hypothesis_unverified': '', 'leads': []}
+    rounds = list(directory.glob(question['id'] + '-round*.json'))
+    if rounds:
+        latest = max(rounds, key=lambda p: int(re.search(r'-round(\d+)\.json$', p.name)[1]))
+        result = json.loads(latest.read_text())
+        value['partial_answers'] = result.get('answers', [])
+        value['hypothesis_unverified'] = str(result.get('explanation', ''))[:2000]
+    path = directory / (question['id'] + '-evidence.json')
+    if path.exists():
+        records = json.loads(path.read_text())
+        seen = set()
+        for identity, record in records.items():
+            if not record.get('ok'):
+                continue
+            request = record.get('request', {})
+            candidates = [request.get('path')]
+            if request.get('tool') in ('find_files', 'resolve_path'):
+                candidates.extend(line for line in record.get('output', '').splitlines() if line.startswith('/'))
+            for candidate in candidates:
+                if isinstance(candidate, str) and candidate.startswith('/') and candidate not in seen:
+                    seen.add(candidate)
+                    value['leads'].append({'path': candidate, 'tool_id': identity, 'assessment': 'Inspected or discovered evidence location; not a confirmed answer/backdoor'})
+    value['leads'] = value['leads'][:20]
+    return value
 
 
 def main():
@@ -355,9 +409,23 @@ def main():
                 entry['status'] = 'DRAFT_REVIEW'
         except (ValueError, OSError, KeyError, TypeError, IndexError) as error:
             entry.update(status='MANUAL_REVIEW', reason=str(error))
+            entry.update(investigation_leads(question, directory))
         results.append(entry)
         print(f'Forensics question {question["number"]}: {entry["status"]}', flush=True)
+        if entry.get('reason'):
+            print('  Blocker: ' + entry['reason'], flush=True)
+        for lead in entry.get('leads', [])[:3]:
+            print('  Evidence lead (unconfirmed): ' + lead['path'], flush=True)
     (directory / 'results.json').write_text(json.dumps(results, indent=2), encoding='utf-8')
+    summary = []
+    for entry in results:
+        summary.append(f'Question {entry["number"]}: {entry["status"]}')
+        if entry.get('reason'): summary.append('Blocker: ' + entry['reason'])
+        if entry.get('hypothesis_unverified'): summary.append('AI hypothesis (UNVERIFIED): ' + entry['hypothesis_unverified'])
+        if entry.get('partial_answers'): summary.append('Partial answers (UNVERIFIED, not written): ' + json.dumps(entry['partial_answers']))
+        summary.extend('Evidence lead (not a verdict): ' + lead['path'] for lead in entry.get('leads', []))
+        summary.append('')
+    (directory / 'summary.txt').write_text('\n'.join(summary), encoding='utf-8')
     print('Forensics evidence/results: ' + str(directory), flush=True)
     if not questions:
         print('No question files found. Set FORENSICS_DIR to their actual directory.', file=sys.stderr)

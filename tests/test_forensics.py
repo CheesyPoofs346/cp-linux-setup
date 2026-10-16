@@ -120,6 +120,30 @@ class ForensicsTests(unittest.TestCase):
         question = agent.discover([self.desktop])[0]
         with self.assertRaises(ValueError): agent.investigate(question, self.tools, self.runner, caller=lambda messages: {'command_requests': [{'command': 'rm -rf /'}]})
 
+    def test_validation_feedback_continues_multistep_investigation(self):
+        question = agent.discover([self.desktop])[0]
+        responses = iter([
+            {'answers': ['guess'], 'needs_manual_review': False},
+            {'tool_requests': [{'tool': 'read_text', 'path': str(self.evidence)}]},
+            {'answers': ['culprit.exe'], 'evidence': [{'tool_id': 'e1', 'quote': 'Evidence: culprit.exe'}], 'needs_manual_review': False},
+        ])
+        seen = []
+        def caller(messages):
+            seen.append(messages[-1]['content'])
+            return next(responses)
+        result = agent.investigate(question, self.tools, self.runner, caller=caller)
+        self.assertEqual(result['answers'], ['culprit.exe'])
+        self.assertIn('validation_feedback', seen[1])
+        self.assertIn('evidence_results', seen[2])
+
+    def test_partial_results_and_real_evidence_paths_survive(self):
+        question = agent.discover([self.desktop])[0]
+        (self.runner / (question['id'] + '-round12.json')).write_text(json.dumps({'answers': ['uncertain'], 'explanation': 'Possibly the helper, not proven'}))
+        (self.runner / (question['id'] + '-evidence.json')).write_text(json.dumps({'e1': {'ok': True, 'request': {'tool': 'read_text', 'path': str(self.evidence)}, 'output': 'Evidence: culprit.exe'}, 'e2': {'ok': False, 'request': {'path': '/invented'}, 'output': 'not found'}}))
+        report = agent.investigation_leads(question, self.runner)
+        self.assertEqual(report['partial_answers'], ['uncertain'])
+        self.assertEqual([lead['path'] for lead in report['leads']], [str(self.evidence)])
+
     def test_nvidia_payload_and_endpoint(self):
         class Response:
             def __enter__(self): return self
