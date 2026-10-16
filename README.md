@@ -1,5 +1,7 @@
 # Linux competition practice setup
 
+Short link to this repository: [bit.ly/cp-linx](https://bit.ly/cp-linx) (also [bit.ly/4eA37uw](https://bit.ly/4eA37uw)).
+
 All engine files from [gobbler56/cp-linux-auto](https://github.com/gobbler56/cp-linux-auto), snapshot `4c51f0d`, with setup instructions. This is an independent repository. Engine code is unchanged; original documentation is in [docs/UPSTREAM_README.md](docs/UPSTREAM_README.md).
 
 Targets **Ubuntu 24.x** and **Linux Mint 21.x**. Run these commands inside the Linux VM.
