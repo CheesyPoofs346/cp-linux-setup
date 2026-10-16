@@ -9,6 +9,7 @@ import stat
 import tempfile
 import sys
 import unittest
+import zipfile
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('forensics', Path(__file__).resolve().parents[1] / 'lib/forensics_agent.py')
@@ -35,6 +36,58 @@ class ForensicsTests(unittest.TestCase):
 
     def tearDown(self):
         self.temp.cleanup()
+
+    def test_archive_members_are_decompressed_without_extraction(self):
+        book = self.root / 'document.xlsm'
+        with zipfile.ZipFile(book, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr('docProps/core.xml', '<source>192.0.2.14</source>')
+            archive.writestr('../outside.txt', 'never extract this')
+        self.assertIn('docProps/core.xml', self.tools.run({'tool': 'zip_list', 'path': str(book)}))
+        self.assertIn('192.0.2.14', self.tools.run({'tool': 'zip_read_text', 'path': str(book), 'member': 'docProps/core.xml'}))
+        self.assertFalse((self.root.parent / 'outside.txt').exists())
+
+    def test_vba_parser_uses_fixed_command_stdin_and_timeout(self):
+        executable = self.runner / '.forensics-venv/bin/python'
+        executable.parent.mkdir(parents=True)
+        executable.touch()
+        from subprocess import CompletedProcess
+        with patch.object(agent.subprocess, 'run', return_value=CompletedProcess([], 0, b'Sub Test(): End Sub', b'')) as run:
+            output = self.tools.run({'tool': 'vba_source', 'path': str(self.evidence)})
+            self.assertIn('Sub Test', output)
+            self.assertEqual(run.call_args.kwargs['input'], self.evidence.read_bytes())
+            self.assertEqual(run.call_args.kwargs['timeout'], 20)
+            self.assertNotIn(str(self.evidence), run.call_args.args[0])
+
+    def test_archive_bomb_and_secret_rejected(self):
+        book = self.root / 'document.zip'
+        with zipfile.ZipFile(book, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr('bomb', 'A' * 200000)
+            archive.writestr('secret', 'nvapi-private-token')
+        for member in ('bomb', 'secret'):
+            with self.assertRaises(ValueError):
+                self.tools.run({'tool': 'zip_read_text', 'path': str(book), 'member': member})
+
+    def test_history_symlink_metadata_without_following(self):
+        history = self.root / '.bash_history'
+        history.symlink_to('/dev/null')
+        result = json.loads(self.tools.run({'tool': 'path_info', 'path': str(history)}))
+        self.assertEqual(result['target'], '/dev/null')
+        with self.assertRaises(ValueError):
+            self.tools.run({'tool': 'read_text', 'path': str(history)})
+
+    def test_duplicate_requests_reuse_evidence_despite_model_ids(self):
+        calls = []
+        def caller(messages):
+            calls.append(messages)
+            if len(calls) <= 2:
+                return {'tool_requests': [{'tool': 'read_text', 'path': str(self.evidence), 'tool_id': str(len(calls))}]}
+            return {'answers': ['culprit.exe'], 'evidence': [{'tool_id': 'e1', 'quote': 'Evidence: culprit.exe'}], 'needs_manual_review': False}
+        question = agent.discover([self.desktop])[0]
+        with patch.object(self.tools, 'run', wraps=self.tools.run) as run:
+            agent.investigate(question, self.tools, self.runner / 'data', caller=caller)
+            self.assertEqual(run.call_count, 1)
+        saved = json.loads((self.runner / 'data' / (question['id'] + '-evidence.json')).read_text())
+        self.assertEqual(len(saved), 1)
 
     def test_discovery_multidigit_extensionless_and_nested(self):
         sub = self.desktop / 'Questions'

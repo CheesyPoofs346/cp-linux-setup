@@ -1,4 +1,5 @@
 data/
+.forensics-venv/
 *.log
 .env
 .env.*

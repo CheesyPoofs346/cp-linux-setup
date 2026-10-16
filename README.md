@@ -128,6 +128,8 @@ HTTP requests have a configurable `AI_TIMEOUT_SECONDS` limit (default 180 second
 
 Forensics uses GLM Flash as the default NVIDIA worker and Nemotron Super as a separate reviewer. The worker receives the full original README with each question; the reviewer receives that same README, question, proposed answer, and collected evidence before any answer is written. Evidence matching and independent approval are both required. These are documented available free prototype endpoints, not a benchmarked claim of the best pair for these tasks.
 
+For Office document investigations, run `bash prepare-forensics.sh` once from your normal account. It installs oletools 0.60.2 in an ignored project virtual environment (and installs python3-venv through apt if missing). The `vba_source` tool extracts macro source in a subprocess with CPU, memory and time limits; it never executes document macros. ZIP member tools also inspect compressed workbook metadata and binary strings without extracting files. Symlink metadata can be inspected without following targets outside evidence roots. Repeated requests reuse their original evidence ID and no longer inflate the evidence count. The startup marker is `forensics-archive-v3`. These additions are regression-tested with synthetic evidence; solving a particular practice image still requires a live run and scoring confirmation.
+
 To investigate forensics without starting other remediation:
 
 ```bash

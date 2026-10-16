@@ -1,6 +1,7 @@
 """Evidence-backed forensic question assistance; no AI-generated shell execution."""
 import fnmatch
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import zipfile
 
 LIMIT = 12000
 QUESTION = re.compile(r'forensics?[ _-]*questions?[ _-]*(\d+)', re.I)
@@ -25,6 +27,17 @@ Use ONLY these structured tools in tool_requests (max 4 per response):
 {"tool":"stat","path":"/file"}, {"tool":"processes"}, {"tool":"sockets"}.
 Also available: {"tool":"resolve_path","path":"/bin/file"},
 {"tool":"file_type","path":"/file"}, {"tool":"package_owner","path":"/file"}.
+Also: {"tool":"path_info","path":"/path"} inspects a symlink without following it;
+{"tool":"zip_list","path":"/file.xlsm"} lists ZIP/OpenXML members;
+{"tool":"zip_read_text","path":"/file.xlsm","member":"docProps/core.xml"},
+{"tool":"zip_strings","path":"/file.xlsm","member":"xl/vbaProject.bin"}.
+Use {"tool":"vba_source","path":"/file.xlsm"} for decompressed VBA source,
+after archive inspection. This statically parses macros; it never executes them.
+ZIP tools decompress members in memory without running or extracting anything.
+Inspect archive members rather than strings on compressed files. Browser profiles may
+be under ~/snap/firefox/common/.mozilla/firefox as well as ~/.mozilla/firefox.
+Do not repeat identical tool requests: cached results are not new evidence. If history
+is a symlink to /dev/null, pivot to download metadata, profiles, logs and documents.
 No shell commands, pipes, scripts, network requests, or write tools exist.
 Return JSON: {"tool_requests":[],"answers":["exact answer"],
 "evidence":[{"tool_id":"e1","quote":"exact substring of successful tool output"}],
@@ -79,6 +92,17 @@ class EvidenceTools:
         if not isinstance(request, dict) or 'command' in request:
             raise ValueError('Shell commands are not supported')
         tool = request.get('tool')
+        if tool == 'path_info':
+            value = request.get('path')
+            if not isinstance(value, str) or not Path(value).is_absolute():
+                raise ValueError('An absolute local path is required')
+            original = Path(os.path.abspath(value))
+            self.path(str(original.parent))
+            if original == self.protected or self.protected in original.parents:
+                raise ValueError('Runner configuration/data is excluded')
+            info = original.lstat()
+            return json.dumps({'path': str(original), 'symlink': stat.S_ISLNK(info.st_mode),
+                               'target': os.readlink(original) if stat.S_ISLNK(info.st_mode) else None})
         if tool == 'resolve_path':
             value = request.get('path')
             if not isinstance(value, str) or not Path(value).is_absolute():
@@ -126,8 +150,44 @@ class EvidenceTools:
             raise ValueError('Private-key/API credential content is excluded')
         if tool == 'sha256':
             return hashlib.sha256(data).hexdigest()
+        if tool == 'vba_source':
+            python = self.protected / '.forensics-venv/bin/python'
+            if not python.is_file():
+                raise ValueError('VBA parser missing: run bash prepare-forensics.sh from your normal account')
+            result = subprocess.run([str(python), '-I', str(Path(__file__).with_name('inspect_vba.py'))],
+                                    input=data, capture_output=True, timeout=20)
+            if result.returncode:
+                raise ValueError('Static VBA parser failed: ' + result.stderr.decode('utf-8', errors='replace')[-500:])
+            output = result.stdout.decode('utf-8', errors='replace')[:LIMIT]
+            if any(secret in output for secret in ('PRIVATE KEY', 'sk-or-v1-', 'nvapi-')):
+                raise ValueError('Private-key/API credential content is excluded')
+            return output
         if tool == 'strings':
             return '\n'.join(s.decode('ascii') for s in re.findall(rb'[ -~]{4,}', data))[:LIMIT]
+        if tool in ('zip_list', 'zip_read_text', 'zip_strings'):
+            with zipfile.ZipFile(io.BytesIO(data)) as archive:
+                entries = archive.infolist()
+                if len(entries) > 1000:
+                    raise ValueError('Archive entry limit exceeded')
+                if tool == 'zip_list':
+                    return '\n'.join(f'{entry.filename} ({entry.file_size} bytes)' for entry in entries)[:LIMIT]
+                member = request.get('member')
+                if not isinstance(member, str) or len(member) > 512:
+                    raise ValueError('An exact archive member name is required')
+                info = archive.getinfo(member)
+                if info.file_size > 2_000_000 or info.file_size > max(1, info.compress_size) * 200:
+                    raise ValueError('Archive member exceeds decompression limit')
+                with archive.open(info) as stream:
+                    content = stream.read(2_000_001)
+                if len(content) > 2_000_000:
+                    raise ValueError('Archive member exceeds decompression limit')
+                if any(secret in content for secret in (b'PRIVATE KEY', b'sk-or-v1-', b'nvapi-')):
+                    raise ValueError('Private-key/API credential content is excluded')
+                if tool == 'zip_strings':
+                    ascii_strings = [s.decode('ascii') for s in re.findall(rb'[ -~]{4,}', content)]
+                    wide_strings = [s.decode('utf-16le') for s in re.findall(rb'(?:[ -~]\x00){4,}', content)]
+                    return '\n'.join(ascii_strings + wide_strings)[:LIMIT]
+                return content.decode('utf-8', errors='replace')[:LIMIT]
         text = data.decode('utf-8', errors='replace')
         if tool == 'read_text':
             offset = request.get('offset', 0)
@@ -318,6 +378,7 @@ def investigate(question, tools, directory, caller=None, readme_html='', progres
     if not 1 <= rounds <= 24:
         raise ValueError('FORENSICS_MAX_ROUNDS must be between 1 and 24')
     rejected = {}
+    request_cache = {}
     for round_number in range(1, rounds + 1):
         if progress:
             progress(f'round {round_number}/{rounds}; {len(evidence)} evidence results collected')
@@ -350,15 +411,21 @@ def investigate(question, tools, directory, caller=None, readme_html='', progres
                 continue
         outputs = []
         for request in requests:
+            signature = json.dumps({k: v for k, v in request.items() if k not in ('id', 'tool_id')}, sort_keys=True) if isinstance(request, dict) else json.dumps(request)
+            if signature in request_cache:
+                outputs.append({**evidence[request_cache[signature]], 'cached': True})
+                continue
             identity = 'e' + str(len(evidence) + 1)
             try:
                 record = {'id': identity, 'request': request, 'ok': True, 'output': tools.run(request)}
-            except (ValueError, OSError, subprocess.SubprocessError, TypeError) as error:
+            except (ValueError, OSError, subprocess.SubprocessError, TypeError, KeyError, zipfile.BadZipFile, RuntimeError) as error:
                 record = {'id': identity, 'request': request, 'ok': False, 'output': str(error)}
             evidence[identity] = record
+            request_cache[signature] = identity
             outputs.append(record)
         (directory / f'{question["id"]}-evidence.json').write_text(json.dumps(evidence, indent=2), encoding='utf-8')
-        messages.extend([{'role': 'assistant', 'content': json.dumps(result)}, {'role': 'user', 'content': json.dumps({'evidence_results': outputs, 'remaining_investigation_rounds': rounds - round_number})}])
+        feedback = 'Repeated requests returned cached evidence. Change strategy; use path_info for symlinks, zip_list then member tools for archives, and inspect Snap browser profiles.' if all(o.get('cached') for o in outputs) else 'Continue following evidence; cite e-number IDs.'
+        messages.extend([{'role': 'assistant', 'content': json.dumps(result)}, {'role': 'user', 'content': json.dumps({'evidence_results': outputs, 'feedback': feedback, 'remaining_investigation_rounds': rounds - round_number})}])
     # The last evidence output must get a synthesis turn; otherwise the loop
     # discards useful evidence solely because the command budget ended.
     messages.append({'role': 'user', 'content': json.dumps({'instruction': 'Investigation tools are now closed. Using the evidence already supplied, return the final answers and exact evidence citations with tool_requests: []. Do not request more commands. If evidence is insufficient, clearly explain what remains unknown.', 'final_synthesis': True})})
@@ -403,7 +470,7 @@ def investigation_leads(question, directory):
 
 def main():
     os.umask(0o077)
-    print('Forensics engine: forensics-finalize-v2', flush=True)
+    print('Forensics engine: forensics-archive-v3', flush=True)
     engine = Path(__file__).resolve().parents[1]
     directory = engine / 'data' / 'forensics' / str(time.time_ns())
     directory.mkdir(parents=True, mode=0o700)
