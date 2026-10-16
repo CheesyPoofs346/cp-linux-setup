@@ -8,7 +8,7 @@ Targets **Ubuntu 24.x** and **Linux Mint 21.x**. Run these commands inside the L
 
 ## Before starting
 
-Take a practice VM snapshot. Read the image README and finish evidence-dependent forensics before making changes. Check your competition rules on scripts and external AI: this tool sends README content and some other analysis inputs to OpenRouter.
+Take a practice VM snapshot. Read the image README and its forensic questions before making changes. Check your competition rules on scripts and external AI: this tool sends README/question/evidence content to the configured provider.
 
 **This modifies the machine.** User auditing can delete users and home directories and change passwords. Interactive mode is not a preview. The runner no longer rewrites APT sources automatically at startup. No score or unattended completion of arbitrary image requirements is guaranteed.
 
@@ -24,7 +24,7 @@ chmod +x cp-engine.sh
 
 ## 2. Configure
 
-Create an API key at [OpenRouter](https://openrouter.ai/settings/keys), then:
+Create an API key at [NVIDIA Build](https://build.nvidia.com/z-ai/glm-5-3-flash), then:
 
 ```bash
 cp config.conf config.local.conf
@@ -32,10 +32,10 @@ chmod 600 config.local.conf
 nano config.local.conf
 ```
 
-The free-model router is already configured. **Only paste your API key** into this line; leave the model setting alone:
+The NVIDIA worker and independent reviewer are preconfigured. Paste your NVIDIA key into this line:
 
 ```bash
-OPENROUTER_API_KEY="paste-your-own-key-here"
+NVIDIA_API_KEY="paste-your-own-key-here"
 ```
 
 Save with **Ctrl+O**, **Enter**, then exit with **Ctrl+X**.
@@ -48,17 +48,18 @@ Never upload your populated config or share the key.
 
 `config.local.conf` is ignored by Git and overrides the tracked defaults, so normal updates do not overwrite your key. Existing installations can copy their populated `config.conf` to this private file before updating.
 
-### NVIDIA (optional)
+### NVIDIA worker and independent reviewer
 
 In `config.local.conf`, select NVIDIA explicitly:
 
 ```bash
 AI_PROVIDER="nvidia"
 NVIDIA_API_KEY="paste-your-own-nvidia-key-here"
-NVIDIA_MODEL="nvidia/nemotron-3-ultra-550b-a55b"
+NVIDIA_MODEL="z-ai/glm-5.3-flash"
+REVIEWER_MODEL="nvidia/nemotron-3-super-120b-a12b"
 ```
 
-Create the key using [NVIDIA's model page](https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b). Its documented endpoint is used directly. There is no fallback to another provider. NVIDIA describes this as a free prototype endpoint; check your account's current limits. Live NVIDIA inference and model accuracy have not been tested here.
+The shared NVIDIA endpoint is `https://integrate.api.nvidia.com/v1/chat/completions`; that URL is not a model ID. Both [GLM Flash](https://build.nvidia.com/z-ai/glm-5-3-flash) and [Nemotron Super](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b) were listed with available free prototype endpoints and no deprecation notice shown on October 16, 2026. This is not a promise of future availability or comparative accuracy. The worker and reviewer must be different models. A missing/deprecated model, quota error, malformed review, or disagreement stops the pipeline; there is no silent model/provider fallback. Live NVIDIA inference has not been verified here.
 
 ### One-command mode
 
@@ -73,24 +74,29 @@ sudo bash ./cp-engine.sh --auto --readme-url https://example.org/image-readme.ht
 Replace the example path/URL with your image's actual README. URLs are per-run inputs, not published image defaults. Unsupported systems are refused unless you explicitly add `--allow-unsupported` for a disposable test. This does not make Ubuntu 22.04 a fully supported platform.
 
 - Parses and independently checks explicit HTML authorized-administrator/user and critical-service lists before remediation. Missing users, changed roles, unknown formats, or additional AI account actions stop the run. A stronger model does not bypass validation.
+- Sends the full original README, section list, forensic results, and proposed module/shared-library source to the separate reviewer. Each README section must receive a source quote and a covered/manual disposition. Approval is bound to the exact review input; only proposed modules explicitly approved by the reviewer can run. Oversized review input is refused rather than truncated. Providing full text and checking coverage does not prove a model understood every instruction.
 - Investigates forensic questions before mutating modules. If questions cannot be found, need review, or fail, remediation stops. Read the forensics section below for auto-fill limits and evidence/backup locations.
 - Starts each module in its own process to isolate its globals and readonly variables. The first nonzero module exit or timeout stops subsequent modules. Existing modules can still contain internal errors that they do not report correctly; a PASS only reflects their exit status.
 - Uses `AUTO_UPDATE_MODE=1` by default (APT configuration only). Set `AUTO_UPDATE_MODE=2` for a package upgrade within the current release. Neither option performs a distribution release upgrade.
 - Leaves AI-driven malware commands and package/file removals for manual review. These are not silently approved.
-- Leaves SSH unchanged unless you configure `SSH_TARGET_USER` and `SSH_PUBLIC_KEY_FILE` with the required public key. SSH defaults to port 22. Verify the image's authentication, forwarding, and key requirements yourself before enabling it.
+- Excludes legacy `user_auditing`, `account_policy`, `os_settings`, and SSH changes from unattended execution, in addition to AI-directed cleanup. They can change account identity, PAM/login policy, permissions, or access and require a separate reviewed implementation. Reviewer approval cannot override these exclusions. Manual/interactive runs of those legacy modules do not receive auto-mode protection.
+- Requires launching with `sudo` from the account to protect. A direct root launch must set `PROTECTED_USER` to the intended non-root login account. Snapshots its UID/GID, groups, shell, home ownership/mode, and local fingerprints of account/login policy. Mismatches stop the run; no automatic broad rollback is attempted.
+- Executes approved remediation in a private mount namespace: identity databases, sudo/PAM/security policy and the protected home tree are read-only, with only runner `data/` writable for reports. Mount/ptrace/raw-I/O/immutable capabilities are dropped before the module starts. Unsupported namespace creation or a failed read-only mount stops execution. These are direct-write protections for the trusted scripts, not a sandbox guarantee against arbitrary malicious root code or a substitute for a VM snapshot. Actual root mount enforcement still needs a disposable VM test.
 - Writes module results to `data/auto-results.tsv`: exit **0** means selected modules reported success, **1** means failure, and **2** means manual review remains. Filled forensic answers and image-specific requirements still need checking in the official scoring report.
 
 HTTP requests have a configurable `AI_TIMEOUT_SECONDS` limit (default 180 seconds); module processes have an `AUTO_MODULE_TIMEOUT` limit (default 1800 seconds). There are no automatic API retries that consume additional quota.
 
 ### AI forensic questions
 
-Forensics uses the provider/model selected in `config.local.conf`, including NVIDIA. The current NVIDIA default is Nemotron 3 Ultra; it is a documented available free prototype endpoint, not a benchmarked claim of the best model for these tasks.
+Forensics uses GLM Flash as the default NVIDIA worker and Nemotron Super as a separate reviewer. The worker receives the full original README with each question; the reviewer receives that same README, question, proposed answer, and collected evidence before any answer is written. Evidence matching and independent approval are both required. These are documented available free prototype endpoints, not a benchmarked claim of the best pair for these tasks.
 
 To investigate forensics without starting other remediation:
 
 ```bash
 sudo bash ./cp-engine.sh -m forensics_questions
 ```
+
+Forensics-only runs also need the image README: add `--readme /path/to/README.html`, or use a cached `data/auto-source.html` from auto mode. A missing README pauses answers rather than letting the worker guess without it.
 
 Discovery searches user Desktops and question subfolders up to two levels deep. It recognizes multi-digit question numbers, case-insensitive `.txt` files, and extensionless files. If files are elsewhere, set `FORENSICS_DIR="/actual/question/directory"` in your private config. HTML, documents, remote links, and localized desktop directories require explicit preparation or a directory override.
 
@@ -102,11 +108,15 @@ Each question has at most six AI exchanges with at most four evidence requests p
 
 Original question files are backed up before replacement, checked for intervening edits, and retain their newline style, permissions, and owner. Evidence reads request Linux no-atime access when permitted; this is not a forensic disk-image acquisition tool. Set `FORENSICS_APPLY_ANSWERS=0` for drafts only; auto remediation then pauses for review.
 
-Results, AI rounds, evidence records, and original backups are saved under `data/forensics/<run-id>/`. Review `results.json` and the official scoring report: `FILLED_UNVERIFIED_SCORE` means a file was filled, not that an answer scored. Put special image formatting rules in `FORENSICS_IMAGE_NOTES` in your private config; the tool never hardcodes a particular practice image.
+Results, AI rounds, reviewer decisions, evidence records, and original backups are saved under `data/forensics/<run-id>/`. Review `results.json` and the official scoring report: `FILLED_UNVERIFIED_SCORE` means a file was filled, not that an answer scored. Put special image formatting rules in `FORENSICS_IMAGE_NOTES` in your private config; the tool never hardcodes a particular practice image.
 
-### Automatic free models and usage
+Live access check on October 16, 2026: the configured key received final text from GLM Flash and Nemotron 3 Super. Nemotron Ultra returned HTTP 404 despite its catalog page showing available, so it is not the reviewer default. These small connectivity probes do not validate reasoning accuracy or full image behavior. The key is not included in this repository.
 
-The default `OPENROUTER_MODEL="openrouter/free"` automatically selects from available free models, filtering for supported request features. You do not need to choose a model. Selection is random within eligible models, so this does not guarantee the strongest model or consistent quality. Always verify parsed users and services before remediation. See [the free router documentation](https://openrouter.ai/openrouter/free).
+### Optional OpenRouter for standalone modules
+
+Reviewed auto mode requires NVIDIA. Standalone modules can still use `AI_PROVIDER="openrouter"` and `OPENROUTER_API_KEY` in your private config. Forensic answer reviews also require a different reviewer model available on the selected provider; the default reviewer ID is NVIDIA-specific.
+
+The optional `OPENROUTER_MODEL="openrouter/free"` selects from available free models, filtering for supported request features. Selection is random within eligible models, so this does not guarantee the strongest model or consistent quality. Always verify parsed users and services before remediation. See [the free router documentation](https://openrouter.ai/openrouter/free).
 
 According to [OpenRouter pricing](https://openrouter.ai/pricing), checked October 16, 2026:
 

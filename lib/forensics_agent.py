@@ -147,7 +147,7 @@ def discover(directories):
     return sorted(questions, key=lambda q: (q['number'], q['path']))
 
 
-def call_ai(messages):
+def call_ai(messages, model=None):
     # Values come from the runner's private config, never from question/tool data.
     provider = os.environ.get('AI_PROVIDER', 'openrouter')
     endpoint = {'openrouter': 'https://openrouter.ai/api/v1/chat/completions', 'nvidia': 'https://integrate.api.nvidia.com/v1/chat/completions'}.get(provider)
@@ -156,7 +156,7 @@ def call_ai(messages):
     key = os.environ.get('OPENROUTER_API_KEY', '')
     if not key:
         raise ValueError('Selected provider API key is missing')
-    payload = {'model': os.environ['OPENROUTER_MODEL'], 'messages': messages, 'temperature': 0.1, 'max_tokens': 16384}
+    payload = {'model': model or os.environ['OPENROUTER_MODEL'], 'messages': messages, 'temperature': 0.1, 'max_tokens': 16384}
     if provider == 'nvidia' and payload['model'].startswith('nvidia/nemotron-3-'):
         payload['chat_template_kwargs'] = {'enable_thinking': True}
     request = urllib.request.Request(endpoint, data=json.dumps(payload).encode(), headers={'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'})
@@ -240,9 +240,9 @@ def apply_answers(question, answers, backup_dir):
             os.unlink(name)
 
 
-def investigate(question, tools, directory, caller=None):
+def investigate(question, tools, directory, caller=None, readme_html=''):
     caller = caller or call_ai
-    messages = [{'role': 'system', 'content': PROMPT}, {'role': 'user', 'content': json.dumps({'question': question, 'image_notes': os.environ.get('FORENSICS_IMAGE_NOTES', '')})}]
+    messages = [{'role': 'system', 'content': PROMPT}, {'role': 'user', 'content': json.dumps({'question': question, 'readme_html_full': readme_html, 'image_notes': os.environ.get('FORENSICS_IMAGE_NOTES', '')})}]
     evidence = {}
     for round_number in range(1, 7):
         result = caller(messages)
@@ -281,7 +281,16 @@ def main():
     for question in questions:
         entry = {'id': question['id'], 'number': question['number'], 'path': question['path']}
         try:
-            result = investigate(question, EvidenceTools(engine), directory)
+            source = Path(os.environ.get('README_FILE') or engine / 'data/auto-source.html')
+            html = source.read_text(encoding='utf-8')
+            if len(html.encode()) > 250000:
+                raise ValueError('README exceeds supported input size; refusing to truncate')
+            result = investigate(question, EvidenceTools(engine), directory, readme_html=html)
+            from peer_review import review
+            evidence_file = directory / (question['id'] + '-evidence.json')
+            payload = {'kind': 'forensic_answer', 'readme_html_full': html, 'question': question, 'worker_answer': result, 'evidence': json.loads(evidence_file.read_text()), 'image_notes': os.environ.get('FORENSICS_IMAGE_NOTES', '')}
+            verdict = review(payload, lambda messages, model: call_ai(messages, model=model), os.environ['OPENROUTER_MODEL'], os.environ.get('REVIEWER_MODEL', ''))
+            (directory / (question['id'] + '-review.json')).write_text(json.dumps(verdict, indent=2))
             entry['answer'] = result
             if os.environ.get('FORENSICS_APPLY_ANSWERS', '1') == '1':
                 apply_answers(question, result['answers'], directory / 'backups')

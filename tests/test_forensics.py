@@ -7,10 +7,12 @@ import os
 from pathlib import Path
 import stat
 import tempfile
+import sys
 import unittest
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('forensics', Path(__file__).resolve().parents[1] / 'lib/forensics_agent.py')
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lib'))
 agent = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(agent)
 
@@ -23,6 +25,8 @@ class ForensicsTests(unittest.TestCase):
         self.desktop.mkdir()
         self.runner = self.root / 'runner'
         self.runner.mkdir()
+        (self.runner / 'data').mkdir()
+        (self.runner / 'data' / 'auto-source.html').write_text('<h1>Practice README</h1><p>Preserve evidence.</p>')
         self.tools = agent.EvidenceTools(self.runner, [self.root])
         self.evidence = self.root / 'evidence.log'
         self.evidence.write_text('Evidence: culprit.exe\n', encoding='utf-8')
@@ -136,8 +140,15 @@ class ForensicsTests(unittest.TestCase):
             def __exit__(self, *args): pass
             def read(self, size): return json.dumps({'choices': [{'message': {'content': json.dumps(self.result)}}]}).encode()
         responses = [Response({'tool_requests': [{'tool': 'read_text', 'path': str(self.evidence)}]}), Response({'answers': ['culprit.exe'], 'evidence': [{'tool_id': 'e1', 'quote': 'Evidence: culprit.exe'}], 'needs_manual_review': False})]
-        settings = {'AI_PROVIDER': 'nvidia', 'OPENROUTER_API_KEY': 'dummy', 'OPENROUTER_MODEL': 'nvidia/test-model', 'FORENSICS_DIR': str(self.desktop), 'FORENSICS_APPLY_ANSWERS': '1'}
-        with patch.dict(os.environ, settings), patch.object(agent, '__file__', str(self.runner / 'lib' / 'forensics_agent.py')), patch.object(agent.urllib.request, 'urlopen', side_effect=responses), contextlib.redirect_stdout(io.StringIO()):
+        settings = {'AI_PROVIDER': 'nvidia', 'OPENROUTER_API_KEY': 'dummy', 'OPENROUTER_MODEL': 'nvidia/test-model', 'REVIEWER_MODEL': 'nvidia/reviewer-model', 'FORENSICS_DIR': str(self.desktop), 'FORENSICS_APPLY_ANSWERS': '1', 'README_FILE': ''}
+        def http(request, **kwargs):
+            payload = json.loads(request.data)
+            if payload['model'] == 'nvidia/reviewer-model':
+                material = json.loads(payload['messages'][-1]['content'])
+                return Response({'input_sha256': material['input_sha256'], 'approved': True, 'reason': 'Answer matches collected evidence and question'})
+            self.assertIn('readme_html_full', payload['messages'][1]['content'])
+            return responses.pop(0)
+        with patch.dict(os.environ, settings), patch.object(agent, '__file__', str(self.runner / 'lib' / 'forensics_agent.py')), patch.object(agent.urllib.request, 'urlopen', side_effect=http), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(agent.main(), 0)
         reports = list((self.runner / 'data' / 'forensics').glob('*/results.json'))
         self.assertEqual(len(reports), 1)
@@ -148,6 +159,16 @@ class ForensicsTests(unittest.TestCase):
         self.question.unlink()
         with patch.dict(os.environ, {'FORENSICS_DIR': str(self.desktop)}), patch.object(agent, '__file__', str(self.runner / 'lib' / 'forensics_agent.py')), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(agent.main(), 2)
+
+    def test_reviewer_decline_preserves_original_question(self):
+        import peer_review
+        original = self.question.read_bytes()
+        def investigation(question, tools, directory, **kwargs):
+            (directory / (question['id'] + '-evidence.json')).write_text('{}')
+            return {'answers': ['culprit.exe'], 'needs_manual_review': False}
+        with patch.dict(os.environ, {'FORENSICS_DIR': str(self.desktop), 'README_FILE': '', 'OPENROUTER_MODEL': 'worker'}), patch.object(agent, '__file__', str(self.runner / 'lib/forensics_agent.py')), patch.object(agent, 'investigate', side_effect=investigation), patch.object(peer_review, 'review', side_effect=ValueError('Reviewer declined')), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(agent.main(), 2)
+        self.assertEqual(self.question.read_bytes(), original)
 
 
 if __name__ == '__main__': unittest.main()

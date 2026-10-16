@@ -576,7 +576,7 @@ main() {
     check_system || return 1
 
     if [[ "$mode" == auto ]]; then
-        check_dependencies curl jq python3 flock timeout || return 1
+        check_dependencies curl jq python3 flock timeout unshare mount setpriv || return 1
         run_auto
         return $?
     fi

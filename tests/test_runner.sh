@@ -28,7 +28,12 @@ mkdir -p "$ENGINE_DIR/data"
 printf '<h1>Fixture</h1>' > "$TEST_DIR/readme.html"
 README_FILE="$TEST_DIR/readme.html"
 README_URL=''
-MODULES=(readme_parser user_auditing account_policy malware prohibited_files unwanted_software ssh_hardening)
+MODULES=(readme_parser forensics_questions local_policy security_policy user_auditing account_policy malware prohibited_files unwanted_software ssh_hardening)
+snapshot_main_account() { return 0; }
+check_guard_support() { return 0; }
+check_main_account() { return 0; }
+review_auto_plan() { return 0; }
+peer_approved() { return 0; }
 run_module() { return 1; }
 timeout() { touch "$TEST_DIR/remediation-started"; }
 if run_auto; then echo 'FAIL: parser failure ignored'; exit 1; fi
@@ -46,12 +51,18 @@ timeout() { [[ "${@: -1}" == forensics_questions ]] && return 0; return 124; }
 status=0
 run_auto || status=$?
 [[ "$status" == 1 ]]
-grep -q $'user_auditing\tFAILED' "$ENGINE_DIR/data/auto-results.tsv"
-grep -q $'account_policy\tNOT_RUN' "$ENGINE_DIR/data/auto-results.tsv"
+grep -q $'local_policy\tFAILED' "$ENGINE_DIR/data/auto-results.tsv"
+grep -q $'security_policy\tNOT_RUN' "$ENGINE_DIR/data/auto-results.tsv"
 timeout() { return 2; }
 status=0
 run_auto || status=$?
 [[ "$status" == 2 ]]
 grep -q $'forensics_questions\tMANUAL_REVIEW' "$ENGINE_DIR/data/auto-results.tsv"
 if grep -q 'user_auditing' "$ENGINE_DIR/data/auto-results.tsv"; then echo 'FAIL: cleanup started before forensics resolved'; exit 1; fi
+timeout() { printf '%s\n' "${@: -1}" >> "$TEST_DIR/reviewer-block-executed"; }
+review_auto_plan() { return 2; }
+status=0
+run_auto || status=$?
+[[ "$status" == 2 && "$(wc -l < "$TEST_DIR/reviewer-block-executed")" == 1 ]]
+grep -q $'peer_review\tMANUAL_REVIEW' "$ENGINE_DIR/data/auto-results.tsv"
 echo 'PASS: API reasoning-only success/error, NVIDIA routing, failed preflight, review status, timeout stops remaining modules'

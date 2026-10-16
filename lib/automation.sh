@@ -1,9 +1,31 @@
 #!/bin/bash
 # One-command orchestration. Modules run in separate processes to isolate globals.
+check_guard_support() {
+    unshare --mount --propagation private true || { log_error "This environment cannot provide the required private mount namespace"; return 1; }
+}
+snapshot_main_account() {
+    python3 "$ENGINE_DIR/lib/account_guard.py" snapshot "$ENGINE_DIR/data/protected-account.json"
+}
+check_main_account() {
+    python3 "$ENGINE_DIR/lib/account_guard.py" check "$ENGINE_DIR/data/protected-account.json"
+}
+review_auto_plan() {
+    printf '%s\n' "${MODULES[@]}" | jq -R . | jq -s '[.[] | select(. != "readme_parser" and . != "forensics_questions" and . != "user_auditing" and . != "account_policy" and . != "os_settings" and . != "ssh_hardening" and . != "malware" and . != "unwanted_software" and . != "prohibited_files")]' > "$ENGINE_DIR/data/review-proposal.json"
+    export AI_PROVIDER OPENROUTER_API_KEY OPENROUTER_MODEL
+    export REVIEWER_MODEL="${REVIEWER_MODEL:-nvidia/nemotron-3-super-120b-a12b}"
+    python3 "$ENGINE_DIR/lib/peer_review.py"
+}
+peer_approved() {
+    jq -e --arg module "$1" 'index($module) != null' "$ENGINE_DIR/data/approved-modules.json" >/dev/null
+}
 run_auto() {
     local source_file="$ENGINE_DIR/data/auto-source.html"
     local report="$ENGINE_DIR/data/auto-results.tsv"
     local module status reviews=0 failed=0
+    [[ "${AI_PROVIDER:-openrouter}" == nvidia ]] || { log_error "Reviewed auto mode requires NVIDIA configuration; standalone modules still support OpenRouter"; return 2; }
+    [[ "${REVIEWER_MODEL:-nvidia/nemotron-3-super-120b-a12b}" != "$OPENROUTER_MODEL" ]] || { log_error "Worker and reviewer must be different models"; return 2; }
+    export PROTECTED_USER="${PROTECTED_USER:-}"
+    check_guard_support || return 1
     umask 077
     mkdir -p "$ENGINE_DIR/data"
     exec 9>"$ENGINE_DIR/data/auto.lock"
@@ -30,6 +52,7 @@ run_auto() {
         return 1
     fi
     printf 'readme_parser\tPASS\n' >> "$report"
+    snapshot_main_account || return 1
     # Forensic evidence may be destroyed by package, account, or file cleanup.
     status=0
     timeout --foreground --kill-after=10 "${AUTO_MODULE_TIMEOUT:-1800}" bash "$ENGINE_DIR/cp-engine.sh" --worker-module forensics_questions </dev/null || status=$?
@@ -43,6 +66,13 @@ run_auto() {
         return 1
     fi
     printf 'forensics_questions\tFILLED_UNVERIFIED_SCORE\n' >> "$report"
+    check_main_account || return 1
+    if ! review_auto_plan; then
+        printf 'peer_review\tMANUAL_REVIEW\n' >> "$report"
+        log_warn "Independent plan review did not approve remediation. No remediation modules started."
+        return 2
+    fi
+    printf 'peer_review\tAPPROVED\n' >> "$report"
     for module in "${MODULES[@]}"; do
         [[ "$module" == readme_parser || "$module" == forensics_questions ]] && continue
         if (( failed )); then
@@ -51,28 +81,31 @@ run_auto() {
         fi
         # These modules use AI-generated removal decisions/commands. Review separately.
         case "$module" in
-            malware|unwanted_software|prohibited_files)
+            user_auditing|account_policy|os_settings|ssh_hardening|malware|unwanted_software|prohibited_files)
                 printf '%s\tMANUAL_REVIEW\n' "$module" >> "$report"
-                log_warn "$module requires separate review; not executed unattended"
+                log_warn "$module is excluded from unattended execution to preserve accounts/access/evidence"
                 reviews=$((reviews + 1))
                 continue
                 ;;
-            ssh_hardening)
-                if [[ -z "${SSH_TARGET_USER:-}" || ! -f "${SSH_PUBLIC_KEY_FILE:-}" ]]; then
-                    printf '%s\tMANUAL_REVIEW\n' "$module" >> "$report"
-                    log_warn "SSH needs SSH_TARGET_USER and SSH_PUBLIC_KEY_FILE; left unchanged"
-                    reviews=$((reviews + 1))
-                    continue
-                fi
-                ;;
         esac
-        if timeout --foreground --kill-after=10 "${AUTO_MODULE_TIMEOUT:-1800}" bash "$ENGINE_DIR/cp-engine.sh" --worker-module "$module" </dev/null; then
+        if ! peer_approved "$module"; then
+            printf '%s\tREVIEWER_WITHHELD\n' "$module" >> "$report"
+            reviews=$((reviews + 1))
+            continue
+        fi
+        check_main_account || return 1
+        if timeout --foreground --kill-after=10 "${AUTO_MODULE_TIMEOUT:-1800}" bash "$ENGINE_DIR/lib/protect_account.sh" "$module" </dev/null; then
             status=PASS
         else
             status=FAILED
             failed=1
         fi
         printf '%s\t%s\n' "$module" "$status" >> "$report"
+        if ! check_main_account; then
+            printf 'protected_account\tCHANGED_STOPPED\n' >> "$report"
+            log_error "Protected state changed; STOP. Restore the VM snapshot before retrying."
+            return 1
+        fi
         if (( failed )); then
             log_error "Stopped at $module (failed or timed out). Remaining modules were not run."
         fi

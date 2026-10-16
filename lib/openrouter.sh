@@ -23,7 +23,7 @@ configure_ai() {
         nvidia)
             OPENROUTER_API_URL="https://integrate.api.nvidia.com/v1/chat/completions"
             OPENROUTER_API_KEY="${NVIDIA_API_KEY:-}"
-            OPENROUTER_MODEL="${NVIDIA_MODEL:-nvidia/nemotron-3-ultra-550b-a55b}"
+            OPENROUTER_MODEL="${NVIDIA_MODEL:-z-ai/glm-5.3-flash}"
             ;;
         *) log_error "AI_PROVIDER must be openrouter or nvidia"; return 1 ;;
     esac
