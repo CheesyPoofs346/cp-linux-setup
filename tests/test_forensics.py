@@ -267,5 +267,31 @@ class ForensicsTests(unittest.TestCase):
             self.assertEqual(agent.main(), 2)
         self.assertEqual(self.question.read_bytes(), original)
 
+    def test_autonomous_commands_investigation_and_fill(self):
+        question = agent.discover([self.desktop])[0]
+        responses = iter([
+            {'commands': [f'cat "{self.evidence}"']},
+            {'answers': ['culprit.exe'], 'solved': True}
+        ])
+        result = agent.investigate(question, self.tools, self.runner, caller=lambda messages: next(responses))
+        self.assertEqual(result['answers'], ['culprit.exe'])
+        agent.apply_answers(question, result['answers'], self.runner / 'backups')
+        self.assertIn(b'ANSWER: culprit.exe', self.question.read_bytes())
+
+    def test_sqlite_query_tool(self):
+        import sqlite3
+        db = self.root / 'history.sqlite'
+        with sqlite3.connect(str(db)) as conn:
+            conn.execute('CREATE TABLE moz_places (id INTEGER, url TEXT);')
+            conn.execute("INSERT INTO moz_places VALUES (1, 'http://13.33.33.37/download.xlsm');")
+        res = self.tools.run({'tool': 'sqlite_query', 'path': str(db), 'query': 'SELECT url FROM moz_places;'})
+        self.assertIn('13.33.33.37', res)
+
+    def test_usr_prefix_stripped_scoring_allowed(self):
+        evidence = {'e1': {'ok': True, 'output': 'Listening process: /usr/bin/nc.traditional'}}
+        result = {'answers': ['/bin/nc.traditional'], 'evidence': [{'tool_id': 'e1', 'quote': '/usr/bin/nc.traditional'}]}
+        answers = agent.supported_answers(result, evidence)
+        self.assertEqual(answers, ['/bin/nc.traditional'])
+
 
 if __name__ == '__main__': unittest.main()
