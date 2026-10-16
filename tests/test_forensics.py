@@ -136,6 +136,26 @@ class ForensicsTests(unittest.TestCase):
         self.assertIn('validation_feedback', seen[1])
         self.assertIn('evidence_results', seen[2])
 
+    def test_supported_answer_with_extra_tool_request_finalizes(self):
+        question = agent.discover([self.desktop])[0]
+        responses = iter([
+            {'tool_requests': [{'tool': 'read_text', 'path': str(self.evidence)}]},
+            {'answers': ['culprit.exe'], 'evidence': [{'tool_id': 'e1', 'quote': 'Evidence: culprit.exe'}], 'needs_manual_review': False, 'tool_requests': [{'tool': 'read_text', 'path': '/not-needed'}]},
+        ])
+        result = agent.investigate(question, self.tools, self.runner, caller=lambda messages: next(responses))
+        self.assertEqual(result['answers'], ['culprit.exe'])
+        self.assertEqual(result['tool_requests'], [])
+
+    def test_budget_reserves_final_synthesis_after_last_tool_output(self):
+        question = agent.discover([self.desktop])[0]
+        responses = iter([
+            {'tool_requests': [{'tool': 'read_text', 'path': str(self.evidence)}]},
+            {'answers': ['culprit.exe'], 'evidence': [{'tool_id': 'e1', 'quote': 'Evidence: culprit.exe'}], 'needs_manual_review': False},
+        ])
+        with patch.dict(os.environ, {'FORENSICS_MAX_ROUNDS': '1'}):
+            result = agent.investigate(question, self.tools, self.runner, caller=lambda messages: next(responses))
+        self.assertEqual(result['answers'], ['culprit.exe'])
+
     def test_partial_results_and_real_evidence_paths_survive(self):
         question = agent.discover([self.desktop])[0]
         (self.runner / (question['id'] + '-round12.json')).write_text(json.dumps({'answers': ['uncertain'], 'explanation': 'Possibly the helper, not proven'}))

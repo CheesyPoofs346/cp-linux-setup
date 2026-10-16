@@ -310,7 +310,7 @@ def apply_answers(question, answers, backup_dir):
             os.unlink(name)
 
 
-def investigate(question, tools, directory, caller=None, readme_html=''):
+def investigate(question, tools, directory, caller=None, readme_html='', progress=None):
     caller = caller or call_ai
     messages = [{'role': 'system', 'content': PROMPT}, {'role': 'user', 'content': json.dumps({'question': question, 'readme_html_full': readme_html, 'image_notes': os.environ.get('FORENSICS_IMAGE_NOTES', '')})}]
     evidence = {}
@@ -319,10 +319,21 @@ def investigate(question, tools, directory, caller=None, readme_html=''):
         raise ValueError('FORENSICS_MAX_ROUNDS must be between 1 and 24')
     rejected = {}
     for round_number in range(1, rounds + 1):
+        if progress:
+            progress(f'round {round_number}/{rounds}; {len(evidence)} evidence results collected')
         result = caller(messages)
         (directory / f'{question["id"]}-round{round_number}.json').write_text(json.dumps(result, indent=2), encoding='utf-8')
         if result.get('command_requests') or result.get('command_request'):
             raise ValueError('AI requested unsupported shell commands')
+        # An evidence-backed answer can be ready even if the model redundantly
+        # asks for another command. Send it to the independent reviewer now.
+        if result.get('answers'):
+            try:
+                supported_answers(result, evidence)
+            except ValueError:
+                pass
+            else:
+                return {**result, 'tool_requests': []}
         requests = result.get('tool_requests', [])
         if not isinstance(requests, list) or len(requests) > 4:
             raise ValueError('Invalid or excessive evidence requests')
@@ -347,8 +358,19 @@ def investigate(question, tools, directory, caller=None, readme_html=''):
             evidence[identity] = record
             outputs.append(record)
         (directory / f'{question["id"]}-evidence.json').write_text(json.dumps(evidence, indent=2), encoding='utf-8')
-        messages.extend([{'role': 'assistant', 'content': json.dumps(result)}, {'role': 'user', 'content': json.dumps({'evidence_results': outputs})}])
-    raise ValueError('Evidence round budget exhausted')
+        messages.extend([{'role': 'assistant', 'content': json.dumps(result)}, {'role': 'user', 'content': json.dumps({'evidence_results': outputs, 'remaining_investigation_rounds': rounds - round_number})}])
+    # The last evidence output must get a synthesis turn; otherwise the loop
+    # discards useful evidence solely because the command budget ended.
+    messages.append({'role': 'user', 'content': json.dumps({'instruction': 'Investigation tools are now closed. Using the evidence already supplied, return the final answers and exact evidence citations with tool_requests: []. Do not request more commands. If evidence is insufficient, clearly explain what remains unknown.', 'final_synthesis': True})})
+    result = caller(messages)
+    (directory / f'{question["id"]}-round{rounds + 1}.json').write_text(json.dumps(result, indent=2), encoding='utf-8')
+    if result.get('command_requests') or result.get('command_request'):
+        raise ValueError('Final synthesis requested unsupported shell commands')
+    try:
+        supported_answers(result, evidence)
+    except ValueError as error:
+        raise ValueError('Final synthesis could not establish a supported answer: ' + str(error)) from None
+    return {**result, 'tool_requests': []}
 
 
 def investigation_leads(question, directory):
@@ -381,6 +403,7 @@ def investigation_leads(question, directory):
 
 def main():
     os.umask(0o077)
+    print('Forensics engine: forensics-finalize-v2', flush=True)
     engine = Path(__file__).resolve().parents[1]
     directory = engine / 'data' / 'forensics' / str(time.time_ns())
     directory.mkdir(parents=True, mode=0o700)
@@ -395,7 +418,7 @@ def main():
             html = source.read_text(encoding='utf-8')
             if len(html.encode()) > 250000:
                 raise ValueError('README exceeds supported input size; refusing to truncate')
-            result = investigate(question, EvidenceTools(engine), directory, readme_html=html)
+            result = investigate(question, EvidenceTools(engine), directory, readme_html=html, progress=lambda text: print(f'Question {question["number"]}: {text}', flush=True))
             from peer_review import review
             evidence_file = directory / (question['id'] + '-evidence.json')
             payload = {'kind': 'forensic_answer', 'readme_html_full': html, 'question': question, 'worker_answer': result, 'evidence': json.loads(evidence_file.read_text()), 'image_notes': os.environ.get('FORENSICS_IMAGE_NOTES', '')}
