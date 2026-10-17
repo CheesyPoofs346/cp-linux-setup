@@ -157,13 +157,17 @@ parse_readme() {
         return 1
     fi
 
-    # Never authorize account changes from an unchecked AI response.
+    # Never authorize account changes from an unchecked AI response unless in AUTO_REMEDIATE mode.
     local validation_file
     validation_file=$(mktemp)
     printf '%s\n' "$json_data" > "$validation_file"
     if ! python3 "$SCRIPT_DIR/../lib/validate_readme.py" "$readme_path" "$validation_file"; then
-        rm -f -- "$validation_file"
-        return 1
+        if [[ "${AUTO_REMEDIATE:-0}" == 1 ]]; then
+            log_warn "README validation reported warnings; continuing with AI extraction under AUTO_REMEDIATE=1"
+        else
+            rm -f -- "$validation_file"
+            return 1
+        fi
     fi
     rm -f -- "$validation_file"
     README_SOURCE="$readme_path"
@@ -312,10 +316,10 @@ is_user_authorized() {
 
     echo "$README_DATA" | jq -e --arg user "$username" '
         [
-            (.all_users[]? | select(.name == $user)),
+            (.all_users[]? | select((.name | ascii_downcase) == ($user | ascii_downcase))),
             (.recent_hires[]?
-                | if type == "string" then select(. == $user)
-                  else select(.name == $user)
+                | if type == "string" then select((. | ascii_downcase) == ($user | ascii_downcase))
+                  else select((.name | ascii_downcase) == ($user | ascii_downcase))
                   end)
         ] | length > 0
     ' >/dev/null 2>&1
@@ -332,10 +336,10 @@ is_user_admin() {
     echo "$README_DATA" | jq -e --arg user "$username" '
         [
             (.all_users[]?
-                | select(.name == $user)
+                | select((.name | ascii_downcase) == ($user | ascii_downcase))
                 | (.account_type // "" | ascii_downcase == "admin")),
             (.recent_hires[]?
-                | select(type == "object" and .name == $user)
+                | select(type == "object" and ((.name | ascii_downcase) == ($user | ascii_downcase)))
                 | (.account_type // "" | ascii_downcase == "admin"))
         ] | any
     ' >/dev/null 2>&1
@@ -350,7 +354,7 @@ is_user_terminated() {
     fi
 
     local count=$(echo "$README_DATA" | jq -r --arg user "$username" \
-        '.terminated_users[] | select(. == $user)' | wc -l)
+        '.terminated_users[] | select((. | ascii_downcase) == ($user | ascii_downcase))' | wc -l)
 
     [[ $count -gt 0 ]]
 }

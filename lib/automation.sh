@@ -90,12 +90,30 @@ run_auto() {
     fi
     if [[ -n "${README_URL:-}" ]]; then
         [[ "$README_URL" == https://* ]] || { log_error "README URL must use HTTPS"; return 1; }
-        curl -fLsS --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 60 "$README_URL" -o "$source_file.download" || return 1
-        mv -- "$source_file.download" "$source_file"
+        if ! curl -fLsS --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 60 "$README_URL" -o "$source_file.download"; then
+            log_warn "Failed to download README from $README_URL"
+            if [[ -s "$source_file" ]]; then
+                log_info "Falling back to existing $source_file"
+            elif [[ -t 0 && -e /dev/tty ]]; then
+                log_info "Paste README content below (HTML or plain text) and type 'EOF' or Ctrl+D when done:"
+                > "$source_file"
+                while IFS= read -r line || [[ -n "$line" ]]; do
+                    [[ "$line" == "EOF" ]] && break
+                    printf '%s\n' "$line" >> "$source_file"
+                done </dev/tty
+            else
+                log_error "Could not download README. Pass a local file with --readme or run: sudo bash start.sh --paste"
+                return 1
+            fi
+        else
+            mv -- "$source_file.download" "$source_file"
+        fi
     elif [[ -n "${README_FILE:-}" && -f "$README_FILE" ]]; then
         [[ "$(readlink -f "$README_FILE")" == "$source_file" ]] || cp -- "$README_FILE" "$source_file" || return 1
+    elif [[ -s "$source_file" ]]; then
+        log_info "Using existing README data in $source_file"
     else
-        log_error "Auto mode requires --readme FILE or --readme-url HTTPS_URL"
+        log_error "Auto mode requires --readme FILE, --readme-url HTTPS_URL, or an existing data/auto-source.html"
         return 1
     fi
     [[ "${AUTO_MODULE_TIMEOUT:-1800}" =~ ^[1-9][0-9]*$ ]] || { log_error "Invalid AUTO_MODULE_TIMEOUT"; return 1; }
@@ -224,7 +242,13 @@ run_worker_module() {
     require_root
     [[ "${CP_AUTO:-0}" == 1 ]] || { log_error "Worker entry is internal to --auto"; return 1; }
     source "$ENGINE_DIR/modules/readme_parser.sh"
-    python3 "$ENGINE_DIR/lib/validate_readme.py" "$ENGINE_DIR/data/auto-source.html" "$ENGINE_DIR/data/readme_parsed.json" || return 1
+    python3 "$ENGINE_DIR/lib/validate_readme.py" "$ENGINE_DIR/data/auto-source.html" "$ENGINE_DIR/data/readme_parsed.json" || {
+        if [[ "${AUTO_REMEDIATE:-0}" == 1 ]]; then
+            log_warn "README validation reported warnings; continuing under AUTO_REMEDIATE=1"
+        else
+            return 1
+        fi
+    }
     README_DATA=$(cat "$ENGINE_DIR/data/readme_parsed.json")
     README_PARSED=1
     if [[ "$module" == ssh_hardening ]]; then

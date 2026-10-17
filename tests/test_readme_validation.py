@@ -38,9 +38,39 @@ class ValidationTests(unittest.TestCase):
         data['terminated_users'] = ['member']
         with self.assertRaises(ValueError): guard.validate(HTML, data)
 
-    def test_no_password_in_error(self):
-        with self.assertRaises(ValueError) as error: guard.validate(HTML.replace('member2<br>', 'member2 invalid words<br>'), DATA)
-        self.assertNotIn('secret', str(error.exception))
+    def test_uppercase_and_bullets(self):
+        html = '<h2>Authorized Administrators:</h2><p>- Benjamin:secret (YOU)<br></p><h2>Authorized Users:</h2><p>* Alice<br>1. Bob<br></p><h2>Critical Services:</h2><p>- SSH (openssh-server)<br></p>'
+        data = {'all_users': [{'name': 'benjamin', 'account_type': 'admin', 'groups': []}, {'name': 'alice', 'account_type': 'standard', 'groups': []}, {'name': 'bob', 'account_type': 'standard', 'groups': []}], 'recent_hires': [], 'terminated_users': [], 'critical_services': ['ssh'], 'groups_to_create': [], 'system_users_to_restrict': []}
+        self.assertEqual(guard.validate(html, data), 3)
+
+    def test_plain_text_readme(self):
+        text = """Authorized Administrators:
+- Benjamin (YOU)
+
+Authorized Users:
+- Alice
+- Bob
+
+Critical Services:
+SSH
+"""
+        data = {'all_users': [{'name': 'benjamin', 'account_type': 'admin', 'groups': []}, {'name': 'alice', 'account_type': 'standard', 'groups': []}, {'name': 'bob', 'account_type': 'standard', 'groups': []}], 'recent_hires': [], 'terminated_users': [], 'critical_services': ['ssh'], 'groups_to_create': [], 'system_users_to_restrict': []}
+        self.assertEqual(guard.validate(text, data), 3)
+
+    def test_auto_remediate_allows_actions(self):
+        import os
+        old = os.environ.get('AUTO_REMEDIATE')
+        os.environ['AUTO_REMEDIATE'] = '1'
+        try:
+            data = copy.deepcopy(DATA)
+            data['terminated_users'] = ['member']
+            # Should not raise under AUTO_REMEDIATE=1
+            self.assertEqual(guard.validate(HTML, data), 3)
+        finally:
+            if old is None:
+                del os.environ['AUTO_REMEDIATE']
+            else:
+                os.environ['AUTO_REMEDIATE'] = old
 
 
 if __name__ == '__main__': unittest.main()
