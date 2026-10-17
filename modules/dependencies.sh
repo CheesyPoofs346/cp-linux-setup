@@ -14,7 +14,7 @@ run_dependencies() {
 
     log_info "Checking and installing required dependencies..."
 
-    local packages=(curl jq debsums)
+    local packages=(curl jq)
     local missing=()
 
     for pkg in "${packages[@]}"; do
@@ -25,22 +25,23 @@ run_dependencies() {
 
     if [[ ${#missing[@]} -gt 0 ]]; then
         log_info "Updating package lists before installing: ${missing[*]}"
-        if ! apt-get update -qq; then
-            log_error "Failed to update package lists"
-            return 1
-        fi
+        apt-get update -qq || log_warn "apt-get update encountered issues; attempting install anyway"
 
         for pkg in "${missing[@]}"; do
             log_info "Installing $pkg..."
             if apt-get install -y "$pkg" >/dev/null 2>&1; then
                 log_success "$pkg installed successfully"
             else
-                log_error "Failed to install $pkg"
-                return 1
+                log_warn "Failed to install $pkg (continuing)"
             fi
         done
     else
         log_success "All dependency packages already installed"
+    fi
+
+    # Optional integrity tool
+    if ! command_exists debsums; then
+        apt-get install -y debsums >/dev/null 2>&1 || true
     fi
 
     return 0

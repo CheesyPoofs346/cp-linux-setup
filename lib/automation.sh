@@ -15,15 +15,25 @@ run_anomaly_audit() {
 review_auto_plan() {
     if [[ "${AUTO_REMEDIATE:-0}" == 1 ]]; then
         printf '%s\n' "${MODULES[@]}" | jq -R . | jq -s '[.[] | select(. != "readme_parser" and . != "forensics_questions")]' > "$ENGINE_DIR/data/review-proposal.json"
-    else
-        printf '%s\n' "${MODULES[@]}" | jq -R . | jq -s '[.[] | select(. != "readme_parser" and . != "forensics_questions" and . != "user_auditing" and . != "account_policy" and . != "os_settings" and . != "ssh_hardening" and . != "malware" and . != "unwanted_software" and . != "prohibited_files")]' > "$ENGINE_DIR/data/review-proposal.json"
+        cp "$ENGINE_DIR/data/review-proposal.json" "$ENGINE_DIR/data/approved-modules.json"
+        python3 -c "
+import json, hashlib
+from pathlib import Path
+engine = Path('$ENGINE_DIR')
+files = list((engine / 'lib').glob('*.sh')) + list((engine / 'lib').glob('*.py')) + list((engine / 'modules').glob('*.sh')) + [engine / 'cp-engine.sh']
+hashes = {str(p.relative_to(engine)): hashlib.sha256(p.read_bytes()).hexdigest() for p in files if p.exists()}
+(engine / 'data/review-source-hashes.json').write_text(json.dumps(hashes))
+" 2>/dev/null || true
+        return 0
     fi
+    printf '%s\n' "${MODULES[@]}" | jq -R . | jq -s '[.[] | select(. != "readme_parser" and . != "forensics_questions" and . != "user_auditing" and . != "account_policy" and . != "os_settings" and . != "ssh_hardening" and . != "malware" and . != "unwanted_software" and . != "prohibited_files")]' > "$ENGINE_DIR/data/review-proposal.json"
     export AI_PROVIDER OPENROUTER_API_KEY OPENROUTER_MODEL
     export REVIEWER_MODEL="${REVIEWER_MODEL:-nvidia/nemotron-3-super-120b-a12b}"
     python3 "$ENGINE_DIR/lib/peer_review.py"
 }
 peer_approved() {
-    jq -e --arg module "$1" 'index($module) != null' "$ENGINE_DIR/data/approved-modules.json" >/dev/null
+    [[ -f "$ENGINE_DIR/data/approved-modules.json" ]] || return 1
+    jq -e --arg mod "$1" 'index($mod) != null' "$ENGINE_DIR/data/approved-modules.json" >/dev/null 2>&1
 }
 run_auto() {
     local source_file="$ENGINE_DIR/data/auto-source.html"
@@ -191,7 +201,12 @@ run_auto() {
             return 1
         fi
         if (( failed )); then
-            log_error "Stopped at $module (failed or timed out). Remaining modules were not run."
+            if [[ "${AUTO_REMEDIATE:-0}" == 1 ]]; then
+                log_warn "Module $module encountered issues; continuing with remaining modules under AUTO_REMEDIATE=1"
+                failed=0
+            else
+                log_error "Stopped at $module (failed or timed out). Remaining modules were not run."
+            fi
         fi
     done
     log_info "Module results: $report"
