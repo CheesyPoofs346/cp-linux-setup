@@ -127,6 +127,43 @@ configure_ipv6_parity() {
     return 0
 }
 
+# Explicitly allow ports for README critical services
+allow_critical_services_ports() {
+    log_section "Configuring Firewall Rules for Critical Services"
+    local -a crit_services=()
+    if [[ -n "${README_DATA:-}" ]] && command_exists jq; then
+        mapfile -t crit_services < <(echo "$README_DATA" | jq -r '.critical_services[]?' 2>/dev/null || true)
+    fi
+
+    for svc in "${crit_services[@]}"; do
+        local s="${svc,,}"
+        case "$s" in
+            *ssh*)
+                ufw allow 22/tcp >/dev/null 2>&1
+                log_success "Allowed port 22/tcp for critical service: $svc"
+                ;;
+            *http*|*apache*|*nginx*)
+                ufw allow 80/tcp >/dev/null 2>&1
+                ufw allow 443/tcp >/dev/null 2>&1
+                log_success "Allowed ports 80/tcp, 443/tcp for critical service: $svc"
+                ;;
+            *ftp*)
+                ufw allow 21/tcp >/dev/null 2>&1
+                log_success "Allowed port 21/tcp for critical service: $svc"
+                ;;
+            *mysql*|*mariadb*)
+                ufw allow 3306/tcp >/dev/null 2>&1
+                log_success "Allowed port 3306/tcp for critical service: $svc"
+                ;;
+            *samba*|*smb*)
+                ufw allow 445/tcp >/dev/null 2>&1
+                ufw allow 139/tcp >/dev/null 2>&1
+                log_success "Allowed ports 445/tcp, 139/tcp for critical service: $svc"
+                ;;
+        esac
+    done
+}
+
 # Deny unnecessary and unused ports
 deny_unnecessary_ports() {
     log_section "Denying Unnecessary Ports"
@@ -171,7 +208,32 @@ deny_unnecessary_ports() {
         fi
     }
 
+    local is_critical_port=0
     for port_proto in "${unnecessary_ports[@]}"; do
+        is_critical_port=0
+        case "$port_proto" in
+            "80/tcp")
+                if echo "${README_DATA:-}" | jq -e '.critical_services[]? | select(. == "apache2" or . == "nginx" or . == "httpd")' >/dev/null 2>&1; then
+                    is_critical_port=1
+                fi
+                ;;
+            "21/tcp")
+                if echo "${README_DATA:-}" | jq -e '.critical_services[]? | select(. == "ftp" or . == "vsftpd" or . == "proftpd" or . == "pure-ftpd")' >/dev/null 2>&1; then
+                    is_critical_port=1
+                fi
+                ;;
+            "445/tcp")
+                if echo "${README_DATA:-}" | jq -e '.critical_services[]? | select(. == "samba" or . == "smbd")' >/dev/null 2>&1; then
+                    is_critical_port=1
+                fi
+                ;;
+        esac
+
+        if (( is_critical_port )); then
+            log_info "Port $port_proto is required by critical service in README; skipping deny rule"
+            continue
+        fi
+
         if is_port_listening "$port_proto"; then
             log_info "Port $port_proto appears to be in use; skipping deny rule"
             continue
@@ -283,9 +345,21 @@ run_defensive_countermeasures() {
         enable_ufw_logging
         configure_ipv6_parity
         configure_ssh_rate_limit
+        allow_critical_services_ports
         deny_unnecessary_ports
         enable_ufw
         verify_ufw_status
+
+        # Enforce AppArmor and Auditd if present
+        if command_exists aa-enforce; then
+            aa-enforce /etc/apparmor.d/* 2>/dev/null || true
+            log_success "AppArmor profiles enforced"
+        fi
+        if command_exists auditctl; then
+            auditctl -e 1 2>/dev/null || true
+            systemctl enable --now auditd 2>/dev/null || true
+            log_success "Auditd logging enabled"
+        fi
     fi
 
     if (( had_errexit )); then

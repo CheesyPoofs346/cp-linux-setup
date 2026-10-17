@@ -351,7 +351,8 @@ upgrade_critical_packages() {
     DEBIAN_FRONTEND=noninteractive apt-get --only-upgrade install -y \
         systemd systemd-sysv libsystemd0 systemd-timesyncd \
         chromium chromium-browser chromium-codecs-ffmpeg-extra \
-        openssh-server openssh-client openssh-sftp-server >/dev/null 2>&1 || true
+        openssh-server openssh-client openssh-sftp-server \
+        firefox firefox-locale-en bash sudo login passwd >/dev/null 2>&1 || true
     log_success "Critical packages upgrade executed"
 }
 

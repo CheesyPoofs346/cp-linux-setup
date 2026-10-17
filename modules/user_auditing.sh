@@ -843,11 +843,34 @@ fix_insecure_passwords() {
         fi
     done <<< "$clean_text"
 
-    # Explicit check for known weak accounts (e.g. llitt)
-    if user_exists "llitt" && [[ "llitt" != "$main_user" && "llitt" != "$protected_user" ]]; then
-        echo "llitt:$DEFAULT_PASSWORD" | chpasswd 2>/dev/null || true
-        log_success "Ensured user llitt has compliant secure password"
-    fi
+    # Check for users specifically required to change password at login
+    while IFS= read -r match_line; do
+        [[ -z "$match_line" ]] && continue
+        if [[ "$match_line" =~ ([a-zA-Z0-9_.-]+)[^.\n]*must[[:space:]]+change[[:space:]]+password ]] || \
+           [[ "$match_line" =~ password[[:space:]]+change[[:space:]]+required[[:space:]]+for[[:space:]]+([a-zA-Z0-9_.-]+) ]]; then
+            local exp_u="${BASH_REMATCH[1],,}"
+            if [[ -n "$exp_u" && "$exp_u" != "$main_user" && "$exp_u" != "$protected_user" && "$exp_u" != "root" ]]; then
+                if user_exists "$exp_u"; then
+                    passwd -e "$exp_u" 2>/dev/null || chage -d 0 "$exp_u" 2>/dev/null || true
+                    log_success "Expired password for $exp_u (must change at next login)"
+                    log_score 5 "Configured $exp_u to change password on next login"
+                fi
+            fi
+        fi
+    done <<< "$clean_text"
+
+    # Audit for accounts with blank, empty, or unencrypted passwords
+    while IFS= read -r blank_user; do
+        [[ -z "$blank_user" ]] && continue
+        if [[ "$blank_user" != "$main_user" && "$blank_user" != "$protected_user" && "$blank_user" != "root" ]]; then
+            if user_exists "$blank_user"; then
+                echo "$blank_user:$DEFAULT_PASSWORD" | chpasswd 2>/dev/null || true
+                log_success "Set secure password for account with blank password: $blank_user"
+                log_score 5 "Secured blank password on account $blank_user"
+                fixed_count=$((fixed_count + 1))
+            fi
+        fi
+    done < <(awk -F: '$2 == "" || $2 == "!" || $2 == "!!" {print $1}' /etc/shadow 2>/dev/null || true)
 
     if [[ $fixed_count -gt 0 ]]; then
         log_success "Remediated $fixed_count insecure user password(s)"

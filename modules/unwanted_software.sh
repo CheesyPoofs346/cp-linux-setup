@@ -457,31 +457,30 @@ interactive_package_removal() {
 run_unwanted_software() {
     log_info "Starting Unwanted Software module..."
 
-    if [[ -f /etc/os-release ]]; then
-        # shellcheck disable=SC1091
-        . /etc/os-release
-        if [[ "${ID}" == "linuxmint" && "${VERSION_ID}" == 21.* ]]; then
-            log_info "Linux Mint ${VERSION_ID} detected; running unwanted software purge list."
+    if [[ "${AUTO_REMEDIATE:-0}" == 1 ]] || [[ -f /etc/os-release ]]; then
+        if [[ -f /etc/os-release ]]; then
+            # shellcheck disable=SC1091
+            . /etc/os-release
+        fi
+        if [[ "${AUTO_REMEDIATE:-0}" == 1 || "${ID:-}" =~ (linuxmint|ubuntu|debian) || "${ID_LIKE:-}" =~ (ubuntu|debian) ]]; then
+            log_info "Distribution detected: ${ID:-linux} ${VERSION_ID:-}; running universal unwanted software purge."
 
             local -a purge_targets=(
                 "wireshark" "wireshark-common" "wireshark-qt" "tshark"
                 "zangband" "zangband-data" "angband" "angband-data"
-                "postfix" "avahi-daemon" "avahi-utils" "avahi-autoipd" "dnsmasq-base"
-                "dnsmasq-base-lua" "cups" "cups-daemon" "cups-browsed" "cups-bsd" "cups-client"
-                "cups-common" "cups-core-drivers" "cups-filters" "cups-filters-core-drivers"
-                "cups-ipp-utils" "cups-pk-helper" "cups-ppdc" "cups-server-common" "bluetooth" "bluez"
-                "bluez-obexd" "bluez-cups" "blueman" "warpinator" "openvpn" "pptp-linux" "ppp"
-                "pppconfig" "pppoeconf" "doona" "chntpw" "ncat" "netcat-openbsd" "tcpdump" "telnet"
-                "bind9-dnsutils" "bind9-host" "update-inetd" "mtr-tiny" "gdb" "gdbserver" "gcc" "gcc-11"
-                "dpkg-dev" "lintian" "make" "transmission-common" "transmission-gtk" "hexchat"
-                "hexchat-common" "thunderbird" "thunderbird-gnome-support" "rhythmbox" "rhythmbox-data"
-                "rhythmbox-plugins" "rhythmbox-plugin-tray-icon" "celluloid" "gamemode" "gamemode-daemon"
-                "neofetch" "strace" "ltrace" "tnftp" "ftp-ssl" "nfs-common" "cifs-utils" "hypnotix"
-                "youtube-dl" "printer-driver-brlaser" "printer-driver-c2esp" "printer-driver-foo2zjs"
-                "printer-driver-foo2zjs-common" "printer-driver-gutenprint" "printer-driver-hpcups"
-                "printer-driver-m2300w" "printer-driver-min12xxw" "printer-driver-pnm2ppa"
-                "printer-driver-postscript-hp" "printer-driver-ptouch" "printer-driver-pxljr"
-                "printer-driver-sag-gdi" "printer-driver-splix"
+                "john" "hydra" "nmap" "zenmap" "aircrack-ng" "ophcrack" "medusa"
+                "nikto" "sqlmap" "kismet" "dsniff" "tcpdump" "doona" "chntpw"
+                "ncat" "netcat" "netcat-openbsd" "netcat-traditional" "dirb" "gobuster"
+                "warpinator" "deluge" "deluge-common" "deluge-gtk"
+                "transmission-common" "transmission-gtk" "transmission-cli" "transmission-daemon"
+                "rygel" "telnetd" "inetutils-telnetd" "telnet"
+                "rsh-server" "rsh-redone-server" "rsh-client" "rsh-redone-client"
+                "atftpd" "tftpd" "tftpd-hpa" "ypbind" "nis" "finger" "fingerd"
+                "talk" "talkd" "ytalk"
+                "avahi-daemon" "avahi-utils" "avahi-autoipd"
+                "cups" "cups-daemon" "cups-browsed" "cups-client"
+                "bluetooth" "bluez" "blueman"
+                "aisleriot" "gnome-mines" "gnome-sudoku" "gnome-chess" "gnome-mahjongg" "gnome-tetravex" "quadrapassel" "gamemode"
             )
 
             # Never purge critical services or web browsers
@@ -493,6 +492,26 @@ run_unwanted_software() {
                             continue
                         fi
                         ;;
+                    *apache*|*nginx*|*httpd*)
+                        if echo "${README_DATA:-}" | jq -e '.critical_services[]? | select(. == "apache2" or . == "nginx" or . == "httpd")' >/dev/null 2>&1; then
+                            continue
+                        fi
+                        ;;
+                    *ftp*|*vsftpd*|*pure-ftpd*|*proftpd*)
+                        if echo "${README_DATA:-}" | jq -e '.critical_services[]? | select(. == "ftp" or . == "vsftpd" or . == "proftpd" or . == "pure-ftpd")' >/dev/null 2>&1; then
+                            continue
+                        fi
+                        ;;
+                    *mysql*|*mariadb*|*postgres*)
+                        if echo "${README_DATA:-}" | jq -e '.critical_services[]? | select(. == "mysql" or . == "mariadb" or . == "postgresql" or . == "postgres")' >/dev/null 2>&1; then
+                            continue
+                        fi
+                        ;;
+                    *samba*|*smb*)
+                        if echo "${README_DATA:-}" | jq -e '.critical_services[]? | select(. == "samba" or . == "smbd")' >/dev/null 2>&1; then
+                            continue
+                        fi
+                        ;;
                     *chromium*|*firefox*)
                         continue
                         ;;
@@ -500,40 +519,15 @@ run_unwanted_software() {
                 filtered_purge+=("$pkg")
             done
 
-            killall -9 wireshark tshark zangband angband >/dev/null 2>&1 || true
+            killall -9 wireshark tshark zangband angband hydra john nmap zenmap aircrack-ng medusa ophcrack nikto sqlmap kismet dsniff tcpdump >/dev/null 2>&1 || true
+            pkill -9 -f "netcat|ncat|cryptcat|socat" >/dev/null 2>&1 || true
             dpkg -P wireshark wireshark-common wireshark-qt tshark libwireshark-data libwireshark15 zangband zangband-data angband angband-data >/dev/null 2>&1 || true
             apt-get purge -y 'wireshark*' 'tshark*' 'zangband*' 'angband*' >/dev/null 2>&1 || true
             rm -rf /usr/bin/wireshark /usr/bin/tshark /usr/bin/zangband /usr/games/zangband /usr/share/zangband /usr/games/angband /etc/wireshark >/dev/null 2>&1 || true
+            rm -f /usr/local/bin/ncat /usr/local/bin/netcat /usr/local/bin/nc >/dev/null 2>&1 || true
             apt-get purge -y "${filtered_purge[@]}" >/dev/null 2>&1 || true
             apt-get autoremove -y >/dev/null 2>&1 || true
-            log_success "Unwanted software purge completed"
-            return 0
-        fi
-        if [[ "${ID}" == "ubuntu" && "${VERSION_ID}" == 24.* ]]; then
-            log_info "Ubuntu ${VERSION_ID} detected; running static unwanted software purge list."
-
-            local -a purge_targets=(
-                "john*" "dirb" "netcat*" "tcpdump" "rygel*" "ftp*" "tnftp*" "avahi-daemon"
-                "cups*" "bluez*" "openvpn*" "gnome-remote-desktop" "gdb" "strace" "bpftrace"
-                "bpfcc-tools" "gamemode*" "samba*" "bind9*" "mtr-tiny" "libnfs*" "snapd"
-                "whoopsie*" "apport*" "libwhoopsie*" "cloud-init" "gstreamer*" "libgstreamer*"
-                "pipewire*" "libpipewire*" "wireplumber" "fprintd" "libfprint*" "sane*"
-                "libsane*" "printer-driver*" "hplip*" "ldap-utils*" "sssd*" "libsss-*"
-                "trace-cmd"
-            )
-
-            if apt-get purge -y "${purge_targets[@]}"; then
-                log_success "Static unwanted software purge completed"
-            else
-                log_warn "Static unwanted software purge encountered errors"
-            fi
-
-            if apt-get autoremove -y; then
-                log_success "Static autoremove completed"
-            else
-                log_warn "Static autoremove encountered errors"
-            fi
-
+            log_success "Universal unwanted software purge completed"
             return 0
         fi
     fi

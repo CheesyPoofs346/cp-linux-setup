@@ -173,6 +173,8 @@ ocredit = -1
 EOF
 
     log_success "Created pwquality configuration at $conf_file"
+    cp "$conf_file" "$main_conf" 2>/dev/null || true
+    chmod 644 "$conf_file" "$main_conf" 2>/dev/null || true
     log_success "Password strength requirements enabled:"
     log_info "  - Min length: $DEFAULT_PW_MINLEN (26)"
     log_info "  - Dictionary checks enabled (27)"

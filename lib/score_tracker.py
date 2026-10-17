@@ -185,10 +185,58 @@ def apply_targeted_hardening(engine_dir):
     # Apply chage to all non-system accounts
     run_command("awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' /etc/passwd | while read u; do chage -M 90 -m 7 -W 14 \"$u\" 2>/dev/null || true; done")
 
-    # 4. User Passwords (llitt weak password, edarby change at login)
-    default_strong_pass = "CyberPatriot2026!#"
-    run_command(f"if id llitt &>/dev/null; then echo 'llitt:{default_strong_pass}' | chpasswd 2>/dev/null; chage -M 90 -m 7 -W 14 llitt 2>/dev/null || true; fi")
-    run_command("if id edarby &>/dev/null; then passwd -e edarby 2>/dev/null || chage -d 0 edarby 2>/dev/null || true; fi")
+    # 4. Dynamic User & Password Auditing (from README and system state)
+    default_strong_pass = "Cyb3rP@triot2026!#"
+    readme_path = engine_dir / 'data/auto-source.html'
+    readme_text = readme_path.read_text(encoding='utf-8', errors='ignore') if readme_path.exists() else ''
+    
+    # Check for users specifically required to change password at login
+    for match in re.finditer(r'([a-zA-Z0-9_.-]+)[^.\n]*must change password|password change required for ([a-zA-Z0-9_.-]+)', readme_text, re.I):
+        u = (match.group(1) or match.group(2)).lower()
+        if u and u not in ('root', 'benjamin'):
+            run_command(f"if id {u} &>/dev/null; then passwd -e {u} 2>/dev/null || chage -d 0 {u} 2>/dev/null || true; fi")
+
+    # Check for weak passwords listed in README (user: password or user (password: ...))
+    for match in re.finditer(r'([a-zA-Z0-9_.-]+)\s*[:\(]\s*(?:password:\s*)?([^\s<()]+)', readme_text, re.I):
+        u = match.group(1).lower()
+        p = match.group(2)
+        if u and p and u not in ('root', 'benjamin'):
+            is_weak = (len(p) < 12 or
+                       not re.search(r'[A-Z]', p) or
+                       not re.search(r'[a-z]', p) or
+                       not re.search(r'[0-9]', p) or
+                       not re.search(r'[^a-zA-Z0-9]', p))
+            if is_weak:
+                run_command(f"if id {u} &>/dev/null; then echo '{u}:{default_strong_pass}' | chpasswd 2>/dev/null; chage -M 90 -m 7 -W 14 {u} 2>/dev/null || true; fi")
+
+    # Ensure all authorized users from README exist; add missing ones & fix admin group
+    parsed_json_path = engine_dir / 'data/readme_parsed.json'
+    if parsed_json_path.exists():
+        try:
+            pdata = json.loads(parsed_json_path.read_text(encoding='utf-8', errors='ignore'))
+            for u in pdata.get('all_users', []):
+                uname = u.get('name', '').lower()
+                role = u.get('account_type', 'standard')
+                if uname and uname not in ('root', 'benjamin'):
+                    run_command(f"if ! id {uname} &>/dev/null; then useradd -m -s /bin/bash {uname} 2>/dev/null; echo '{uname}:{default_strong_pass}' | chpasswd 2>/dev/null; fi")
+                    if role == 'admin':
+                        run_command(f"usermod -aG sudo {uname} 2>/dev/null || true")
+                    else:
+                        run_command(f"deluser {uname} sudo 2>/dev/null || gpasswd -d {uname} sudo 2>/dev/null || true")
+                        run_command(f"deluser {uname} admin 2>/dev/null || gpasswd -d {uname} admin 2>/dev/null || true")
+            for rh in pdata.get('recent_hires', []):
+                rname = (rh.get('name') if isinstance(rh, dict) else str(rh)).lower()
+                if rname and rname not in ('root', 'benjamin'):
+                    run_command(f"if ! id {rname} &>/dev/null; then useradd -m -s /bin/bash {rname} 2>/dev/null; echo '{rname}:{default_strong_pass}' | chpasswd 2>/dev/null; fi")
+            for tu in pdata.get('terminated_users', []):
+                tname = tu.lower() if isinstance(tu, str) else ''
+                if tname and tname not in ('root', 'benjamin'):
+                    run_command(f"if id {tname} &>/dev/null; then userdel -r {tname} 2>/dev/null || passwd -l {tname} 2>/dev/null || true; fi")
+        except Exception:
+            pass
+
+    # Ensure all accounts with empty/blank passwords in /etc/shadow are secured
+    run_command("awk -F: '$2 == \"\" || $2 == \"!\" || $2 == \"!!\" {print $1}' /etc/shadow | while read u; do if [ \"$u\" != \"root\" ] && [ \"$u\" != \"benjamin\" ]; then echo \"$u:Cyb3rP@triot2026!#\" | chpasswd 2>/dev/null || true; fi; done")
 
     # 5. Disable Guest Account & Automatic Login
     lightdm_conf = Path('/etc/lightdm/lightdm.conf.d/50-no-guest.conf')
@@ -270,15 +318,23 @@ kernel.randomize_va_space = 2
     run_command("find /home /root -type f \\( -iname '*.mp3' -o -iname '*.mp4' -o -iname '*.wav' -o -iname '*.avi' -o -iname '*.mkv' -o -iname '*.flac' -o -iname '*.mov' -o -iname '*.ogg' -o -iname '*.wma' -o -iname '*.wmv' -o -iname '*.m4a' \\) -delete 2>/dev/null || true")
     run_command("rm -rf /home/*/{Music,Videos,Downloads}/*.{mp3,mp4,wav,avi,mkv,flac,mov,ogg,wma,wmv,m4a} 2>/dev/null || true")
 
-    # 9. Purge prohibited software: Wireshark, Zangband, Angband, hacking tools
-    run_command("killall -9 wireshark tshark zangband angband 2>/dev/null || true")
+    # 9. Purge prohibited software: Wireshark, Zangband, Angband, hacking tools, P2P
+    run_command("killall -9 wireshark tshark zangband angband hydra john nmap zenmap aircrack-ng medusa ophcrack nikto sqlmap kismet dsniff tcpdump 2>/dev/null || true")
+    run_command("pkill -9 -f 'netcat|ncat|cryptcat|socat' 2>/dev/null || true")
     run_command("dpkg -P wireshark wireshark-common wireshark-qt tshark libwireshark-data libwireshark15 zangband zangband-data angband angband-data 2>/dev/null || true")
-    run_command("DEBIAN_FRONTEND=noninteractive apt-get purge -y 'wireshark*' 'tshark*' 'zangband*' 'angband*' john hydra nmap zenmap aircrack-ng ophcrack medusa nikto sqlmap kismet dsniff tcpdump 2>/dev/null || true")
+    run_command("DEBIAN_FRONTEND=noninteractive apt-get purge -y 'wireshark*' 'tshark*' 'zangband*' 'angband*' john hydra nmap zenmap aircrack-ng ophcrack medusa nikto sqlmap kismet dsniff tcpdump warpinator deluge transmission-common transmission-gtk rygel telnetd inetutils-telnetd rsh-server rsh-redone-server atftpd tftpd ypbind nis 2>/dev/null || true")
     run_command("rm -rf /usr/bin/wireshark /usr/bin/tshark /usr/bin/zangband /usr/games/zangband /usr/share/zangband /usr/games/angband /etc/wireshark 2>/dev/null || true")
+    run_command("rm -f /usr/local/bin/ncat /usr/local/bin/netcat /usr/local/bin/nc 2>/dev/null || true")
 
-    # 10. Insecure legacy services
-    for dsvc in ['telnet', 'rsh-server', 'rsh-client', 'rsh-redone-server', 'rexec', 'finger', 'tftp', 'talk', 'nis', 'ypbind', 'avahi-daemon', 'cups', 'bluetooth']:
+    # Sudoers hardening (remove NOPASSWD)
+    run_command("sed -i -E 's/\\s+NOPASSWD:\\s*/ /g' /etc/sudoers 2>/dev/null || true")
+    run_command("for sf in /etc/sudoers.d/*; do [ -f \"$sf\" ] && sed -i -E 's/\\s+NOPASSWD:\\s*/ /g' \"$sf\" 2>/dev/null || true; done")
+    run_command("chmod 440 /etc/sudoers 2>/dev/null; chmod 750 /etc/sudoers.d 2>/dev/null || true")
+
+    # 10. Insecure legacy services & rogue backdoors
+    for dsvc in ['telnet', 'telnetd', 'rsh-server', 'rsh-client', 'rsh-redone-server', 'rexec', 'finger', 'tftp', 'atftpd', 'talk', 'nis', 'ypbind', 'avahi-daemon', 'cups', 'cups-browsed', 'bluetooth', 'rygel']:
         run_command(f"systemctl stop {dsvc} 2>/dev/null; systemctl disable {dsvc} 2>/dev/null || true")
+    run_command("systemctl mask ctrl-alt-del.target 2>/dev/null || true")
 
     # 11. Linux Mint Update Manager Automation & Auto-Refresh
     run_command("mintupdate-automation upgrade enable 2>/dev/null || true")

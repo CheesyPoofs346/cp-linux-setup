@@ -33,11 +33,17 @@ fast_strike_hardening() {
     echo "================================================================"
 
     # 1. Purge hacking tools & prohibited software immediately
-    echo "[+] Purging prohibited software (Wireshark, Zangband, hacking tools)..."
-    killall -9 wireshark tshark zangband angband hydra john nmap 2>/dev/null || true
+    echo "[+] Purging prohibited software (Wireshark, games, hacking tools, P2P)..."
+    killall -9 wireshark tshark zangband angband hydra john nmap zenmap aircrack-ng medusa ophcrack nikto sqlmap kismet dsniff tcpdump 2>/dev/null || true
+    pkill -9 -f "netcat|ncat|cryptcat|socat" 2>/dev/null || true
     dpkg -P wireshark wireshark-common wireshark-qt tshark libwireshark-data libwireshark15 zangband zangband-data angband angband-data 2>/dev/null || true
-    DEBIAN_FRONTEND=noninteractive apt-get purge -y "wireshark*" "tshark*" "zangband*" "angband*" "john*" "hydra*" "nmap*" "zenmap*" "aircrack-ng*" 2>/dev/null || true
+    DEBIAN_FRONTEND=noninteractive apt-get purge -y \
+        "wireshark*" "tshark*" "zangband*" "angband*" "john*" "hydra*" "nmap*" "zenmap*" \
+        "aircrack-ng*" "ophcrack*" "medusa*" "nikto*" "sqlmap*" "kismet*" "dsniff*" \
+        "warpinator*" "deluge*" "transmission-*" "rygel*" "telnetd*" "inetutils-telnetd*" \
+        "rsh-server*" "rsh-redone-server*" "atftpd*" "tftpd*" "ypbind*" "nis*" 2>/dev/null || true
     rm -rf /usr/bin/wireshark /usr/bin/tshark /usr/bin/zangband /usr/games/zangband /usr/share/zangband /usr/games/angband /etc/wireshark 2>/dev/null || true
+    rm -f /usr/local/bin/ncat /usr/local/bin/netcat /usr/local/bin/nc 2>/dev/null || true
 
     # 2. Purge prohibited media in /home and /root
     echo "[+] Purging prohibited media (*.mp3, *.mp4, *.wav)..."
@@ -63,14 +69,63 @@ fast_strike_hardening() {
         systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || true
     fi
 
-    # 5. Fix insecure passwords (llitt) & edarby password change at login
-    echo "[+] Enforcing user password compliance..."
-    if id llitt &>/dev/null; then
-        echo "llitt:CyberPatriot2026!#" | chpasswd 2>/dev/null || true
+    # 5. Enforce baseline user security dynamically (no hardcoded names)
+    echo "[+] Enforcing user account and password compliance..."
+    local prot_user="${SUDO_USER:-benjamin}"
+    
+    # Lock root password
+    passwd -l root 2>/dev/null || true
+
+    # Find regular non-system accounts (UID >= 1000 and < 65534)
+    local regular_users
+    regular_users=$(awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' /etc/passwd 2>/dev/null || true)
+
+    for u in $regular_users; do
+        # Enforce password aging on all accounts
+        chage -M 90 -m 7 -W 14 "$u" 2>/dev/null || true
+        
+        # Check if user has an empty password field in /etc/shadow
+        local shadow_entry
+        shadow_entry=$(grep "^${u}:" /etc/shadow 2>/dev/null || true)
+        local shadow_pass
+        shadow_pass=$(printf '%s' "$shadow_entry" | cut -d: -f2)
+        if [[ -z "$shadow_pass" || "$shadow_pass" == "!" || "$shadow_pass" == "!!" ]]; then
+            if [[ "$u" != "$prot_user" && "$u" != "root" ]]; then
+                echo "${u}:Cyb3rP@triot2026!#" | chpasswd 2>/dev/null || true
+                echo "    [+] Set secure password for account with blank/empty password: $u"
+            fi
+        fi
+    done
+
+    # Check for unauthorized UID 0 accounts (root equivalents)
+    for u in $(awk -F: '$3 == 0 && $1 != "root" {print $1}' /etc/passwd 2>/dev/null || true); do
+        echo "    [!] ALERT: Rogue UID 0 account found: $u! Locking immediately."
+        passwd -l "$u" 2>/dev/null || true
+    done
+
+    # Disable Guest Account & auto-login
+    mkdir -p /etc/lightdm/lightdm.conf.d 2>/dev/null || true
+    printf "[Seat:*]\nallow-guest=false\ngreeter-show-manual-login=false\ngreeter-hide-users=true\n" > /etc/lightdm/lightdm.conf.d/50-no-guest.conf 2>/dev/null || true
+    if [[ -f /etc/gdm3/custom.conf ]]; then
+        sed -i -E 's/AutomaticLoginEnable\s*=\s*true/AutomaticLoginEnable=false/I' /etc/gdm3/custom.conf 2>/dev/null || true
+        sed -i -E 's/TimedLoginEnable\s*=\s*true/TimedLoginEnable=false/I' /etc/gdm3/custom.conf 2>/dev/null || true
     fi
-    if id edarby &>/dev/null; then
-        passwd -e edarby 2>/dev/null || chage -d 0 edarby 2>/dev/null || true
-    fi
+
+    # Remove dangerous NOPASSWD in sudoers
+    sed -i -E 's/\s+NOPASSWD:\s*/ /g' /etc/sudoers 2>/dev/null || true
+    for sf in /etc/sudoers.d/*; do
+        [[ -f "$sf" ]] && sed -i -E 's/\s+NOPASSWD:\s*/ /g' "$sf" 2>/dev/null || true
+    done
+    chmod 440 /etc/sudoers 2>/dev/null || true
+    chmod 750 /etc/sudoers.d 2>/dev/null || true
+
+    # File permissions baseline
+    chmod 644 /etc/passwd 2>/dev/null && chown root:root /etc/passwd 2>/dev/null || true
+    chmod 640 /etc/shadow 2>/dev/null && (chown root:shadow /etc/shadow 2>/dev/null || chown root:root /etc/shadow 2>/dev/null) || true
+    chmod 644 /etc/group 2>/dev/null && chown root:root /etc/group 2>/dev/null || true
+    chmod 640 /etc/gshadow 2>/dev/null && (chown root:shadow /etc/gshadow 2>/dev/null || chown root:root /etc/gshadow 2>/dev/null) || true
+    chmod 600 /etc/crontab 2>/dev/null && chown root:root /etc/crontab 2>/dev/null || true
+    chmod 755 /usr/lib 2>/dev/null || true
 
     # 6. Linux Mint Update Manager automation & auto-refresh
     echo "[+] Enabling Linux Mint update automation..."
@@ -116,7 +171,8 @@ MEOF
     DEBIAN_FRONTEND=noninteractive apt-get --only-upgrade install -y \
         systemd systemd-sysv libsystemd0 systemd-timesyncd \
         chromium chromium-browser chromium-codecs-ffmpeg-extra \
-        openssh-server openssh-client openssh-sftp-server >/dev/null 2>&1 || true
+        openssh-server openssh-client openssh-sftp-server \
+        firefox firefox-locale-en bash sudo login passwd >/dev/null 2>&1 || true
 
     echo "[+] Fast-strike baseline hardening finished!"
     echo "================================================================"
