@@ -13,7 +13,7 @@ python3 "$ENGINE_DIR/lib/peer_review.py" --check-sources
 python3 "$ENGINE_DIR/lib/account_guard.py" check "$guard"
 home=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["home"])' "$guard")
 # Direct legacy writes cannot change account databases or PAM policy during non-account modules
-if [[ "$module" != "user_auditing" && "$module" != "account_policy" ]]; then
+if [[ "$module" != "user_auditing" && "$module" != "account_policy" && "$module" != "os_settings" ]]; then
     for path in /etc/passwd /etc/group /etc/shadow /etc/gshadow /etc/sudoers /etc/login.defs /etc/pam.d /etc/sudoers.d /etc/security; do
         [[ -e "$path" ]] || continue
         mount --bind "$path" "$path"

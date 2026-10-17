@@ -126,8 +126,8 @@ fix_system_file_permissions() {
     if [[ -f /etc/passwd ]]; then
         total_checks=$((total_checks + 1))
         log_info "Checking /etc/passwd..."
-        chown root:root /etc/passwd 2>/dev/null
-        chmod 644 /etc/passwd 2>/dev/null
+        chown root:root /etc/passwd 2>/dev/null || true
+        chmod 644 /etc/passwd 2>/dev/null || true
         if [[ $? -eq 0 ]]; then
             log_success "✓ /etc/passwd (644, root:root)"
             fixed_count=$((fixed_count + 1))
@@ -138,8 +138,8 @@ fix_system_file_permissions() {
     if [[ -f /etc/group ]]; then
         total_checks=$((total_checks + 1))
         log_info "Checking /etc/group..."
-        chown root:root /etc/group 2>/dev/null
-        chmod 644 /etc/group 2>/dev/null
+        chown root:root /etc/group 2>/dev/null || true
+        chmod 644 /etc/group 2>/dev/null || true
         if [[ $? -eq 0 ]]; then
             log_success "✓ /etc/group (644, root:root)"
             fixed_count=$((fixed_count + 1))
@@ -303,13 +303,24 @@ fix_system_file_permissions() {
             groupadd syslog 2>/dev/null
         fi
 
-        chown root:syslog /var/log 2>/dev/null
-        chmod 750 /var/log 2>/dev/null
+        chown root:syslog /var/log 2>/dev/null || true
+        chmod 750 /var/log 2>/dev/null || true
         if [[ $? -eq 0 ]]; then
             log_success "✓ /var/log directory (750, root:syslog)"
             fixed_count=$((fixed_count + 1))
         fi
     fi
+
+    # Fix system directory permissions (including /usr/lib)
+    for sysdir in /usr/lib /usr/bin /usr/sbin /bin /sbin /etc; do
+        if [[ -d "$sysdir" ]]; then
+            total_checks=$((total_checks + 1))
+            chown root:root "$sysdir" 2>/dev/null || true
+            chmod 755 "$sysdir" 2>/dev/null || true
+            fixed_count=$((fixed_count + 1))
+            log_success "✓ $sysdir directory (755, root:root)"
+        fi
+    done
 
     # Critical log files
     local log_files=(

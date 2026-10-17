@@ -210,6 +210,9 @@ run_auto() {
         fi
     done
     log_info "Module results: $report"
+    if [[ "${AUTO_REMEDIATE:-0}" == 1 ]]; then
+        python3 "$ENGINE_DIR/lib/score_tracker.py" || true
+    fi
     log_warn "Module status is not an image score. Check forensics, README-specific requirements, required services, and the official scoring report."
     (( failed == 0 )) || return 1
     # A review-needed run must not look like complete success to callers.
