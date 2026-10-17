@@ -18,6 +18,42 @@ import zipfile
 
 LIMIT = 12000
 QUESTION = re.compile(r'forensics?[ _-]*questions?[ _-]*(\d+)', re.I)
+PLACEHOLDER_REGEX = re.compile(r'^\s*<[^>]+>\s*$|^\s*\[[^\]]+\]\s*$', re.I)
+
+PLACEHOLDER_KEYWORDS = (
+    'type answer', 'type-answer', 'insert answer', 'insert-answer',
+    'enter answer', 'enter-answer', 'write answer', 'your answer',
+    'put answer', 'type here', 'answer here', 'replace me',
+    'todo', 'tbd', 'xxx', '???', 'none', 'n/a', 'unknown',
+    'fill in', 'type_answer', 'your-answer'
+)
+
+
+def is_unanswered_placeholder(val):
+    if not val or not isinstance(val, str):
+        return True
+    stripped = val.strip()
+    if not stripped:
+        return True
+    if PLACEHOLDER_REGEX.match(stripped):
+        return True
+    lower = stripped.lower()
+    for kw in PLACEHOLDER_KEYWORDS:
+        if kw in lower:
+            return True
+    return False
+
+
+def clean_answer_value(val):
+    if not val or not isinstance(val, str):
+        return ""
+    ans = str(val).strip()
+    while (ans.startswith('<') and ans.endswith('>') and len(ans) >= 2) or \
+          (ans.startswith('[') and ans.endswith(']') and len(ans) >= 2):
+        ans = ans[1:-1].strip()
+    ans = re.sub(r'^\s*ANSWER\s*:\s*', '', ans, flags=re.I).strip()
+    return ans
+
 
 PROMPT = '''You are an automated Linux incident response and forensics investigator solving practice-image forensic questions.
 Your goal is to find the exact, accurate answer required by the question by running investigative commands.
@@ -67,6 +103,9 @@ Return ONLY JSON in one of these two forms:
 CRITICAL RULES:
 - Read and follow any special scoring instructions provided in the question or competition notes (for example, if instructed: "If your path contains /usr, remove that from your answer", format the answer without /usr).
 - Provide the exact answer format expected (e.g. IP address alone, path alone, filename alone, or username alone).
+- NEVER return a placeholder string (such as '<Type Answer Here>', '<Type-Answer-Here>', '[Type Answer Here]', 'None', 'TBD', etc.) in "answers". You must actively investigate and find the real answer.
+- DO NOT wrap your answers in angle brackets (<...>) or brackets ([...]). Output the clean string (e.g. "192.168.1.5", "/home/benjamin/Music", "benjamin").
+- Do NOT include the prefix "ANSWER:" in the answer string; return only the answer value itself.
 - Never execute destructive commands (like rm -rf, mkfs, reboot).
 '''
 
@@ -221,6 +260,53 @@ def gather_initial_recon():
                 if len(parts) >= 7 and parts[2].isdigit() and int(parts[2]) >= 1000:
                     users.append(f"{parts[0]} (uid={parts[2]}, shell={parts[6]})")
         recon['user_accounts'] = ', '.join(users[:20])
+    except Exception:
+        pass
+    # 10. Suspicious bash history commands
+    try:
+        history_leads = []
+        for h in glob.glob('/home/*/.bash_history') + ['/root/.bash_history']:
+            if os.path.isfile(h):
+                lines = Path(h).read_text(errors='replace').splitlines()
+                suspicious = [l.strip() for l in lines if l.strip() and any(k in l.lower() for k in ('curl', 'wget', 'nc ', 'netcat', 'chmod 777', 'chmod +x', 'sudo ', 'useradd', 'chown', 'base64', 'python', 'bash -i', 'sh -i', 'shadow', 'passwd', 'crontab', 'authorized_keys', 'git clone', 'tar -x', 'unzip'))]
+                if suspicious:
+                    history_leads.append(f"{h}: " + " | ".join(suspicious[-10:]))
+        if history_leads:
+            recon['suspicious_bash_history'] = '\n'.join(history_leads[:15])
+    except Exception:
+        pass
+    # 11. Custom systemd services and ld.so.preload
+    try:
+        custom_units = []
+        for p in glob.glob('/etc/systemd/system/*.service') + glob.glob('/lib/systemd/system/backdoor*.service'):
+            if os.path.isfile(p):
+                custom_units.append(f"{p}: " + Path(p).read_text(errors='replace')[:200].replace('\n', ' '))
+        if custom_units:
+            recon['custom_systemd_services'] = '\n'.join(custom_units[:10])
+        if Path('/etc/ld.so.preload').exists():
+            recon['ld_so_preload'] = Path('/etc/ld.so.preload').read_text(errors='replace').strip()
+    except Exception:
+        pass
+    # 12. Recent package installs from /var/log/dpkg.log
+    try:
+        if Path('/var/log/dpkg.log').exists():
+            dpkg_lines = [l for l in Path('/var/log/dpkg.log').read_text(errors='replace').splitlines() if ' install ' in l or ' status installed ' in l]
+            if dpkg_lines:
+                recon['recent_package_installs'] = '\n'.join(dpkg_lines[-15:])
+    except Exception:
+        pass
+    # 13. Prohibited media files in user directories
+    try:
+        media_leads = []
+        res = subprocess.run(
+            ['find', '/home', '/root', '-maxdepth', '4', '-type', 'f', '(', '-iname', '*.mp3', '-o', '-iname', '*.mp4', '-o', '-iname', '*.avi', '-o', '-iname', '*.mkv', '-o', '-iname', '*.wav', ')'],
+            capture_output=True, timeout=5
+        )
+        for l in res.stdout.decode('utf-8', errors='ignore').splitlines():
+            if l.strip():
+                media_leads.append(l.strip())
+        if media_leads:
+            recon['prohibited_media_files'] = '\n'.join(media_leads[:20])
     except Exception:
         pass
     return recon
@@ -509,9 +595,11 @@ def supported_answers(result, evidence, recon=None):
         raise ValueError('Model did not provide a complete confident answer set')
     if result.get('needs_manual_review') is True:
         raise ValueError('Marked for manual review')
-    for answer in answers:
-        if not isinstance(answer, str) or not answer.strip() or '\n' in answer or '\r' in answer or len(answer) > 1000:
-            raise ValueError('Invalid answer text')
+    cleaned_answers = [clean_answer_value(a) for a in answers]
+    for answer in cleaned_answers:
+        if not isinstance(answer, str) or not answer.strip() or '\n' in answer or '\r' in answer or len(answer) > 1000 or is_unanswered_placeholder(answer):
+            raise ValueError('Invalid answer text or placeholder returned')
+    result['answers'] = cleaned_answers
     quotes = []
     citations = result.get('evidence', [])
     if isinstance(citations, list) and citations:
@@ -533,34 +621,36 @@ def supported_answers(result, evidence, recon=None):
     elif not isinstance(citations, list):
         raise ValueError('Invalid evidence citation')
 
-    if quotes:
-        for answer in answers:
-            match = any(
-                answer in quote or
-                ('/usr' + answer) in quote or
-                answer.replace('/bin/', '/usr/bin/') in quote or
-                answer.lower() in quote.lower()
-                for quote in quotes
-            )
-            if not match:
-                raise ValueError('Answer is not present in cited evidence; review derivation manually')
-    elif not evidence and not recon:
-        raise ValueError('Model did not provide a complete confident answer set')
-    else:
-        all_text = ' '.join(str(rec.get('output', '')) for rec in evidence.values() if rec.get('ok'))
-        if recon:
-            all_text += ' ' + json.dumps(recon, ensure_ascii=False)
-        for answer in answers:
-            match = (
+    all_text = ' '.join(str(rec.get('output', '')) for rec in evidence.values() if rec.get('ok'))
+    if recon:
+        all_text += ' ' + json.dumps(recon, ensure_ascii=False)
+
+    for answer in cleaned_answers:
+        matched = False
+        if quotes:
+            for quote in quotes:
+                if (
+                    answer in quote or
+                    ('/usr' + answer) in quote or
+                    answer.replace('/bin/', '/usr/bin/') in quote or
+                    answer.lower() in quote.lower() or
+                    quote.strip().lower() in answer.lower() or
+                    Path(answer).name in quote
+                ):
+                    matched = True
+                    break
+        if not matched:
+            if (
                 answer in all_text or
                 ('/usr' + answer) in all_text or
                 answer.replace('/bin/', '/usr/bin/') in all_text or
                 answer.lower() in all_text.lower() or
                 result.get('solved') is True
-            )
-            if not match:
-                raise ValueError('Answer is not present in cited evidence; review derivation manually')
-    return answers
+            ):
+                matched = True
+        if not matched:
+            raise ValueError(f"Answer '{answer}' is not present in cited evidence; review derivation manually")
+    return cleaned_answers
 
 
 def apply_answers(question, answers, backup_dir):
@@ -583,7 +673,8 @@ def apply_answers(question, answers, backup_dir):
     if len(placeholders) != len(answers):
         raise ValueError('Answer count does not match ANSWER placeholders; manual review required')
     for index, answer in zip(placeholders, answers):
-        lines[index] = re.sub(r'(?i)^(\s*ANSWER\s*:).*', lambda m: m[1] + ' ' + answer, lines[index])
+        clean = clean_answer_value(answer)
+        lines[index] = re.sub(r'(?i)^(\s*ANSWER\s*:).*', lambda m: m[1] + ' ' + clean, lines[index])
     updated = bom + (newline.join(lines) + (newline if original.endswith((b'\n', b'\r')) else '')).encode('utf-8')
     fd, name = tempfile.mkstemp(prefix='.forensics-', dir=path.parent)
     try:
@@ -605,8 +696,17 @@ def apply_answers(question, answers, backup_dir):
 def investigate(question, tools, directory, caller=None, readme_html='', progress=None):
     caller = caller or call_ai
     recon = gather_initial_recon()
+    lines = question['content'].splitlines()
+    answer_lines = [re.sub(r'^\s*ANSWER\s*:\s*', '', line, flags=re.I).strip() for line in lines if re.match(r'^\s*ANSWER\s*:', line, re.I)]
+    partial_status = []
+    for idx, ans in enumerate(answer_lines, 1):
+        if ans and not is_unanswered_placeholder(ans):
+            partial_status.append(f"Answer {idx}: already filled with '{clean_answer_value(ans)}'")
+        else:
+            partial_status.append(f"Answer {idx}: UNANSWERED placeholder '{ans}' (NEEDS INVESTIGATION)")
     user_payload = {
         'question': question,
+        'placeholder_status': partial_status,
         'readme_html_full': readme_html,
         'image_notes': os.environ.get('FORENSICS_IMAGE_NOTES', ''),
         'initial_recon': recon
@@ -750,16 +850,21 @@ def main():
     for question in questions:
         entry = {'id': question['id'], 'number': question['number'], 'path': question['path']}
         lines = question['content'].splitlines()
-        existing_answers = [m.group(1).strip() for line in lines for m in [re.match(r'^\s*ANSWER\s*:\s*(\S.*)$', line, re.I)] if m]
+        existing_answers = [clean_answer_value(m.group(1)) for line in lines for m in [re.match(r'^\s*ANSWER\s*:\s*(.*)$', line, re.I)] if m]
         placeholders = [line for line in lines if re.match(r'^\s*ANSWER\s*:', line, re.I)]
-        if not os.environ.get('FORENSICS_FORCE_RESOLVE') and placeholders and len(existing_answers) == len(placeholders):
-            print(f"Question {question['number']}: Already answered on Desktop -> {existing_answers}", flush=True)
+        valid_answers = [ans for ans in existing_answers if not is_unanswered_placeholder(ans)]
+
+        if not os.environ.get('FORENSICS_FORCE_RESOLVE') and placeholders and len(valid_answers) == len(placeholders):
+            print(f"Question {question['number']}: Already answered on Desktop -> {valid_answers}", flush=True)
             entry['status'] = 'FILLED_UNVERIFIED_SCORE'
-            entry['answers'] = existing_answers
+            entry['answers'] = valid_answers
             results.append(entry)
             continue
 
-        print(f"Forensics: Attempting to solve Question {question['number']}...", flush=True)
+        if valid_answers and len(valid_answers) < len(placeholders):
+            print(f"Question {question['number']}: Partial answers on Desktop ({len(valid_answers)}/{len(placeholders)}); investigating remaining...", flush=True)
+        else:
+            print(f"Forensics: Attempting to solve Question {question['number']}...", flush=True)
         try:
             source = Path(os.environ.get('README_FILE') or engine / 'data/auto-source.html')
             html = source.read_text(encoding='utf-8') if source.exists() else ''

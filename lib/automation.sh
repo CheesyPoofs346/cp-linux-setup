@@ -165,8 +165,10 @@ run_auto() {
     else
         printf 'forensics_questions\tFILLED_UNVERIFIED_SCORE\n' >> "$report"
     fi
+    log_success "Forensics completed. Proceeding immediately to system remediation..."
     check_main_account || return 1
     # Broad package file reads happen only after forensic answers are collected.
+    log_info "Running system anomaly audit and baseline checks..."
     run_anomaly_audit 1 || return 1
     if ! review_auto_plan; then
         printf 'peer_review\tMANUAL_REVIEW\n' >> "$report"

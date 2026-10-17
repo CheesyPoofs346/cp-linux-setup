@@ -305,5 +305,37 @@ class ForensicsTests(unittest.TestCase):
         with patch.dict(os.environ, {'FORENSICS_DIR': str(self.desktop), 'README_FILE': ''}), patch.object(agent, '__file__', str(self.runner / 'lib/forensics_agent.py')), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(agent.main(), 0)
 
+    def test_placeholder_recognition(self):
+        self.assertTrue(agent.is_unanswered_placeholder('<Type Answer Here>'))
+        self.assertTrue(agent.is_unanswered_placeholder('<Type-Answer-Here>'))
+        self.assertTrue(agent.is_unanswered_placeholder('[Type Answer Here]'))
+        self.assertTrue(agent.is_unanswered_placeholder('<Type-Answer-Here-Leave-Single-Space-After-Colon>'))
+        self.assertTrue(agent.is_unanswered_placeholder(''))
+        self.assertTrue(agent.is_unanswered_placeholder('   '))
+        self.assertTrue(agent.is_unanswered_placeholder('TODO'))
+        self.assertTrue(agent.is_unanswered_placeholder('N/A'))
+        self.assertFalse(agent.is_unanswered_placeholder('/home/benjamin/Music'))
+        self.assertFalse(agent.is_unanswered_placeholder('192.168.1.50'))
+        self.assertFalse(agent.is_unanswered_placeholder('benjamin'))
+
+    def test_clean_answer_value(self):
+        self.assertEqual(agent.clean_answer_value('<192.168.1.50>'), '192.168.1.50')
+        self.assertEqual(agent.clean_answer_value('[/home/benjamin/Music]'), '/home/benjamin/Music')
+        self.assertEqual(agent.clean_answer_value('ANSWER: 192.168.1.50'), '192.168.1.50')
+        self.assertEqual(agent.clean_answer_value('<<culprit.exe>>'), 'culprit.exe')
+
+    def test_placeholder_not_skipped_and_clean_answer_written(self):
+        self.question.write_bytes(b'Identify the file.\r\nANSWER: <Type-Answer-Here>\r\n')
+        question = agent.discover([self.desktop])[0]
+        responses = iter([
+            {'answers': ['<culprit.exe>'], 'solved': True, 'evidence': [{'tool_id': 'e0', 'quote': 'culprit.exe'}]}
+        ])
+        with patch.object(agent, 'gather_initial_recon', return_value={'lead': 'culprit.exe'}):
+            result = agent.investigate(question, self.tools, self.runner, caller=lambda messages: next(responses))
+            self.assertEqual(result['answers'], ['culprit.exe'])
+            agent.apply_answers(question, result['answers'], self.runner / 'backups')
+            # Verify clean answer without angle brackets written directly into file
+            self.assertEqual(self.question.read_bytes(), b'Identify the file.\r\nANSWER: culprit.exe\r\n')
+
 
 if __name__ == '__main__': unittest.main()

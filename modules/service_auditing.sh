@@ -42,15 +42,35 @@ readonly ALWAYS_STOP_SERVICES=(
     "qbittorrent"
     "rtorrent"
     "ktorrent"
-    # Telnet
+    # Telnet & insecure remote shells
     "telnetd"
     "inetd"
     "xinetd"
+    "rsh-server"
+    "rsh-redone-server"
+    "rlogin"
+    "rlogind"
+    "rexec"
+    "talk"
+    "talkd"
+    "ytalk"
+    # RPC, NFS & NIS
+    "rpcbind"
+    "nfs-kernel-server"
+    "nfs-common"
+    "nis"
+    "ypbind"
+    # Insecure TFTP
+    "tftpd"
+    "tftpd-hpa"
+    "atftpd"
     # Bluetooth (often unnecessary in competitions)
     "bluetooth"
     # SNMP (rarely needed, security risk)
     "snmpd"
     "snmp"
+    # Insecure proxies
+    "squid"
 )
 
 # System prompt for AI service analysis (keep output as strict JSON with no prose)

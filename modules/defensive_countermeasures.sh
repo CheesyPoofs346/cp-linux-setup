@@ -133,15 +133,26 @@ deny_unnecessary_ports() {
 
     # Ports that are commonly unused on hardened systems
     local unnecessary_ports=(
-        "21/tcp"   # FTP
-        "23/tcp"   # Telnet
-        "25/tcp"   # SMTP (server)
-        "80/tcp"   # HTTP
-        "110/tcp"  # POP3
-        "143/tcp"  # IMAP
-        "445/tcp"  # SMB
-        "3389/tcp" # RDP
-        "1900/udp" # SSDP
+        "21/tcp"    # FTP
+        "23/tcp"    # Telnet
+        "25/tcp"    # SMTP (server)
+        "69/udp"    # TFTP
+        "80/tcp"    # HTTP
+        "110/tcp"   # POP3
+        "111/tcp"   # RPC
+        "111/udp"   # RPC
+        "143/tcp"   # IMAP
+        "445/tcp"   # SMB
+        "515/tcp"   # LPD
+        "1337/tcp"  # Backdoor
+        "1900/udp"  # SSDP
+        "2049/tcp"  # NFS
+        "2049/udp"  # NFS
+        "3389/tcp"  # RDP
+        "4444/tcp"  # Metasploit default
+        "5555/tcp"  # Backdoor
+        "6667/tcp"  # IRC backdoor
+        "31337/tcp" # Back Orifice
     )
 
     # Helper: check if a port is currently listening to avoid blocking active services
