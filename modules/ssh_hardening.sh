@@ -149,6 +149,36 @@ ${allow_users_line}
 EOF
 
     chmod 0644 "$SSHD_CONFIG_FILE"
+
+    # Directly harden /etc/ssh/sshd_config for competition scoring checkers
+    local main_sshd_config="/etc/ssh/sshd_config"
+    if [[ -f "$main_sshd_config" ]]; then
+        backup_file "$main_sshd_config" 2>/dev/null || true
+        if grep -qE '^\s*#?\s*PermitRootLogin' "$main_sshd_config"; then
+            sed -i -E 's/^\s*#?\s*PermitRootLogin\s+.*/PermitRootLogin no/' "$main_sshd_config"
+        else
+            echo "PermitRootLogin no" >> "$main_sshd_config"
+        fi
+
+        if grep -qE '^\s*#?\s*PermitEmptyPasswords' "$main_sshd_config"; then
+            sed -i -E 's/^\s*#?\s*PermitEmptyPasswords\s+.*/PermitEmptyPasswords no/' "$main_sshd_config"
+        else
+            echo "PermitEmptyPasswords no" >> "$main_sshd_config"
+        fi
+
+        if grep -qE '^\s*#?\s*Protocol' "$main_sshd_config"; then
+            sed -i -E 's/^\s*#?\s*Protocol\s+.*/Protocol 2/' "$main_sshd_config"
+        fi
+
+        if grep -qE '^\s*#?\s*X11Forwarding' "$main_sshd_config"; then
+            sed -i -E 's/^\s*#?\s*X11Forwarding\s+.*/X11Forwarding no/' "$main_sshd_config"
+        fi
+
+        if grep -qE '^\s*#?\s*MaxAuthTries' "$main_sshd_config"; then
+            sed -i -E 's/^\s*#?\s*MaxAuthTries\s+.*/MaxAuthTries 4/' "$main_sshd_config"
+        fi
+    fi
+
     log_success "Hardened SSH configuration created"
     return 0
 }

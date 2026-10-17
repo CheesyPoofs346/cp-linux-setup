@@ -300,10 +300,59 @@ EOF
 
     if command_exists mintupdate-automation; then
         mintupdate-automation upgrade enable >/dev/null 2>&1 || true
+        mintupdate-automation autoremove enable >/dev/null 2>&1 || true
     fi
     systemctl enable --now mintupdate-automation-upgrade.timer >/dev/null 2>&1 || true
+    systemctl enable --now mintupdate-automation-autoremove.timer >/dev/null 2>&1 || true
+    systemctl enable --now apt-daily.timer apt-daily-upgrade.timer >/dev/null 2>&1 || true
+
+    # System-wide dconf configuration for Mint Update Manager
+    mkdir -p /etc/dconf/db/local.d /etc/dconf/profile
+    cat > /etc/dconf/profile/user <<'EOF'
+user-db:user
+system-db:local
+EOF
+
+    cat > /etc/dconf/db/local.d/01-mintupdate <<'EOF'
+[com/linuxmint/updates]
+autorefresh-days=0
+autorefresh-hours=2
+autorefresh-minutes=0
+auto-update=true
+auto-update-enabled=true
+refresh-schedule-enabled=true
+automation-upgrade=true
+automation-autoremove=true
+remove-obsolete-kernels=true
+EOF
+    dconf update >/dev/null 2>&1 || true
+
+    # Per-user gsettings configuration
+    while IFS= read -r u; do
+        [[ -z "$u" ]] && continue
+        for k in auto-update refresh-schedule-enabled automation-upgrade auto-update-enabled; do
+            sudo -u "$u" gsettings set com.linuxmint.updates "$k" true >/dev/null 2>&1 || true
+        done
+        sudo -u "$u" gsettings set com.linuxmint.updates autorefresh-hours 2 >/dev/null 2>&1 || true
+        sudo -u "$u" gsettings set com.linuxmint.updates autorefresh-minutes 0 >/dev/null 2>&1 || true
+    done < <(awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' /etc/passwd)
+
+    gsettings set com.linuxmint.updates refresh-schedule-enabled true >/dev/null 2>&1 || true
+    gsettings set com.linuxmint.updates auto-update-enabled true >/dev/null 2>&1 || true
+    gsettings set com.linuxmint.updates automation-upgrade true >/dev/null 2>&1 || true
 
     log_success "Mint Update Manager refresh schedule and automation enabled"
+}
+
+# Dedicated upgrade for competition-scored critical packages
+upgrade_critical_packages() {
+    log_section "Upgrading Critical Packages (systemd, chromium, openssh)"
+    DEBIAN_FRONTEND=noninteractive apt-get update -y >/dev/null 2>&1 || true
+    DEBIAN_FRONTEND=noninteractive apt-get --only-upgrade install -y \
+        systemd systemd-sysv libsystemd0 systemd-timesyncd \
+        chromium chromium-browser chromium-codecs-ffmpeg-extra \
+        openssh-server openssh-client openssh-sftp-server >/dev/null 2>&1 || true
+    log_success "Critical packages upgrade executed"
 }
 
 # Clear package holds that would block updates
@@ -381,7 +430,7 @@ run_os_updates() {
     log_info "2) Full run (includes full upgrade) [default]"
     local update_choice
     if [[ "${CP_AUTO:-0}" == 1 ]]; then
-        if [[ "${AUTO_REMEDIATE:-0}" == 1 && -z "${AUTO_UPDATE_MODE:-}" ]]; then
+        if [[ "${AUTO_REMEDIATE:-0}" == 1 && "${FORCE_NO_UPGRADE:-0}" != 1 ]]; then
             update_choice=2
         else
             update_choice="${AUTO_UPDATE_MODE:-1}"
@@ -424,6 +473,9 @@ run_os_updates() {
 
     # Enable systemd timers for automatic updates
     enable_auto_update_timers
+
+    # Always upgrade critical packages scored in competition
+    upgrade_critical_packages
 
     if [[ "$update_choice" == "1" ]]; then
         log_warn "Skipping full system upgrade per user selection"

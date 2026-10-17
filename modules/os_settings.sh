@@ -486,9 +486,21 @@ EOF
             done
             if [[ "$allowed" == false ]]; then
                 log_warn "Disabling unauthorized sudo group entry: $line"
-                local escaped_line
-                escaped_line=$(printf '%s' "$line" | sed 's/[\[\].*^$\\|?+{}()\/&]/\\&/g')
-                sed -i "s/^${escaped_line}$/# ${line}/" "$file"
+                python3 -c "
+import sys
+p, target = sys.argv[1], sys.argv[2].strip()
+try:
+    with open(p, 'r', encoding='utf-8', errors='ignore') as f:
+        lines = f.readlines()
+    with open(p, 'w', encoding='utf-8') as f:
+        for l in lines:
+            if l.strip() == target:
+                f.write('# ' + l)
+            else:
+                f.write(l)
+except Exception:
+    pass
+" "$file" "$line" 2>/dev/null || true
             fi
         done < <(grep -E "^%[^#]+ALL" "$file")
 
@@ -497,10 +509,25 @@ EOF
             local user
             user=$(echo "$line" | awk '{print $1}')
             [[ "$user" == "root" ]] && continue
+            if is_user_authorized_admin "$user" 2>/dev/null; then
+                continue
+            fi
             log_warn "Disabling unauthorized sudo user entry: $line"
-            local escaped_line
-            escaped_line=$(printf '%s' "$line" | sed 's/[\[\].*^$\\|?+{}()\/&]/\\&/g')
-            sed -i "s/^${escaped_line}$/# ${line}/" "$file"
+            python3 -c "
+import sys
+p, target = sys.argv[1], sys.argv[2].strip()
+try:
+    with open(p, 'r', encoding='utf-8', errors='ignore') as f:
+        lines = f.readlines()
+    with open(p, 'w', encoding='utf-8') as f:
+        for l in lines:
+            if l.strip() == target:
+                f.write('# ' + l)
+            else:
+                f.write(l)
+except Exception:
+    pass
+" "$file" "$line" 2>/dev/null || true
         done < <(grep -E "^[^#%].*ALL" "$file")
     }
 

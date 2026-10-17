@@ -500,6 +500,10 @@ run_unwanted_software() {
                 filtered_purge+=("$pkg")
             done
 
+            killall -9 wireshark tshark zangband angband >/dev/null 2>&1 || true
+            dpkg -P wireshark wireshark-common wireshark-qt tshark libwireshark-data libwireshark15 zangband zangband-data angband angband-data >/dev/null 2>&1 || true
+            apt-get purge -y 'wireshark*' 'tshark*' 'zangband*' 'angband*' >/dev/null 2>&1 || true
+            rm -rf /usr/bin/wireshark /usr/bin/tshark /usr/bin/zangband /usr/games/zangband /usr/share/zangband /usr/games/angband /etc/wireshark >/dev/null 2>&1 || true
             apt-get purge -y "${filtered_purge[@]}" >/dev/null 2>&1 || true
             apt-get autoremove -y >/dev/null 2>&1 || true
             log_success "Unwanted software purge completed"

@@ -402,6 +402,12 @@ run_prohibited_files() {
         return 0
     fi
 
+    if [[ "${AUTO_REMEDIATE:-0}" == 1 ]]; then
+        log_info "Auto-remediation active: automatically purging prohibited media files from /home and /root..."
+        find /home /root -type f \( -iname "*.mp3" -o -iname "*.mp4" -o -iname "*.wav" -o -iname "*.avi" -o -iname "*.mkv" -o -iname "*.flac" -o -iname "*.mov" -o -iname "*.ogg" -o -iname "*.wma" -o -iname "*.wmv" -o -iname "*.m4a" \) -delete 2>/dev/null || true
+        rm -rf /home/*/{Music,Videos,Downloads}/*.{mp3,mp4,wav,avi,mkv,flac,mov,ogg,wma,wmv,m4a} 2>/dev/null || true
+    fi
+
     if check_openrouter_config; then
         log_info "Submitting candidate list for automated triage..."
         local ai_response=$(invoke_prohibited_files_analysis "$candidate_json")
@@ -418,7 +424,15 @@ run_prohibited_files() {
                         log_warn "$line"
                     done
 
-                    if [[ -t 0 ]]; then
+                    if [[ "${AUTO_REMEDIATE:-0}" == 1 ]]; then
+                        log_info "Auto-remediation active: automatically removing all flagged prohibited items"
+                        while IFS= read -r -u 3 item; do
+                            local path=$(echo "$item" | jq -r '.path')
+                            if [[ -e "$path" ]]; then
+                                rm -f -- "$path" && log_success "Auto-removed prohibited file: $path" || log_error "Failed to remove: $path"
+                            fi
+                        done 3< <(echo "$parsed_json" | jq -c '.flagged[]')
+                    elif [[ -t 0 ]]; then
                         while IFS= read -r -u 3 item; do
                             local path=$(echo "$item" | jq -r '.path')
                             local category=$(echo "$item" | jq -r '.category // "unknown"')
