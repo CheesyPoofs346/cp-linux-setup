@@ -111,14 +111,32 @@ run_auto() {
     timeout --foreground --kill-after=10 "${AUTO_MODULE_TIMEOUT:-1800}" bash "$ENGINE_DIR/cp-engine.sh" --worker-module forensics_questions </dev/null || status=$?
     if [[ "$status" == 2 ]]; then
         printf 'forensics_questions\tMANUAL_REVIEW\n' >> "$report"
-        log_warn "Forensics are unresolved. Remediation has not started. See data/forensics/."
-        return 2
+        log_warn "Forensics are unresolved. Check the question files on your Desktop."
+        local continue_choice=""
+        if [[ -e /dev/tty && "${AUTO_REMEDIATE:-0}" == 1 ]]; then
+            read -r -p "Do you want to continue with remediation? [y/N]: " continue_choice </dev/tty || true
+        fi
+        if [[ "$continue_choice" =~ ^[Yy]$ ]]; then
+            log_info "Continuing with system remediation as requested..."
+        else
+            log_warn "Remediation paused. Review questions and re-run start.sh when ready."
+            return 2
+        fi
     elif [[ "$status" != 0 ]]; then
         printf 'forensics_questions\tFAILED\n' >> "$report"
-        log_error "Forensics failed or timed out. Remediation has not started."
-        return 1
+        log_error "Forensics failed or timed out."
+        local continue_choice=""
+        if [[ -e /dev/tty && "${AUTO_REMEDIATE:-0}" == 1 ]]; then
+            read -r -p "Do you want to continue with remediation anyway? [y/N]: " continue_choice </dev/tty || true
+        fi
+        if [[ "$continue_choice" =~ ^[Yy]$ ]]; then
+            log_info "Continuing with system remediation as requested..."
+        else
+            return 1
+        fi
+    else
+        printf 'forensics_questions\tFILLED_UNVERIFIED_SCORE\n' >> "$report"
     fi
-    printf 'forensics_questions\tFILLED_UNVERIFIED_SCORE\n' >> "$report"
     check_main_account || return 1
     # Broad package file reads happen only after forensic answers are collected.
     run_anomaly_audit 1 || return 1
