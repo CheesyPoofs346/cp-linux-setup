@@ -16,6 +16,8 @@ import urllib.error
 import urllib.request
 import zipfile
 
+import select
+
 LIMIT = 12000
 QUESTION = re.compile(r'forensics?[ _-]*questions?[ _-]*(\d+)', re.I)
 PLACEHOLDER_REGEX = re.compile(r'^\s*<[^>]+>\s*$|^\s*\[[^\]]+\]\s*$', re.I)
@@ -24,9 +26,38 @@ PLACEHOLDER_KEYWORDS = (
     'type answer', 'type-answer', 'insert answer', 'insert-answer',
     'enter answer', 'enter-answer', 'write answer', 'your answer',
     'put answer', 'type here', 'answer here', 'replace me',
-    'todo', 'tbd', 'xxx', '???', 'none', 'n/a', 'unknown',
-    'fill in', 'type_answer', 'your-answer'
+    'todo', 'tbd', 'xxx', '???', 'fill in', 'type_answer', 'your-answer'
 )
+
+_tty_stream = None
+if os.name == 'posix':
+    try:
+        if os.path.exists('/dev/tty'):
+            _fd = os.open('/dev/tty', os.O_RDONLY | os.O_NONBLOCK)
+            _tty_stream = os.fdopen(_fd, 'r')
+    except Exception:
+        pass
+
+
+def check_user_skip(timeout=0):
+    """Returns True if the user pressed Enter on the terminal to skip."""
+    if os.environ.get('SKIP_FORENSICS') == '1':
+        return True
+    streams = []
+    if _tty_stream is not None:
+        streams.append(_tty_stream)
+    if sys.stdin is not None and hasattr(sys.stdin, 'fileno'):
+        streams.append(sys.stdin)
+
+    for stream in streams:
+        try:
+            rlist, _, _ = select.select([stream], [], [], timeout)
+            if rlist:
+                stream.readline()
+                return True
+        except Exception:
+            pass
+    return False
 
 
 def is_unanswered_placeholder(val):
@@ -38,6 +69,8 @@ def is_unanswered_placeholder(val):
     if PLACEHOLDER_REGEX.match(stripped):
         return True
     lower = stripped.lower()
+    if lower in ('n/a', 'na', 'none', 'unknown', 'null'):
+        return True
     for kw in PLACEHOLDER_KEYWORDS:
         if kw in lower:
             return True
@@ -723,9 +756,17 @@ def investigate(question, tools, directory, caller=None, readme_html='', progres
     request_cache = {}
 
     for round_number in range(1, rounds + 1):
+        if check_user_skip(0):
+            print(f"\n[SKIP] User pressed Enter: Skipping Question {question['number']} immediately!\n", flush=True)
+            saved_answers = [clean_answer_value(a) for a in answer_lines if a and not is_unanswered_placeholder(a)]
+            return {'answers': saved_answers if saved_answers else ['SKIPPED'], 'explanation': 'Skipped by user'}
         if progress:
-            progress(f'turn {round_number}/{rounds}: investigating...')
+            progress(f'turn {round_number}/{rounds}: investigating... (Press ENTER to skip to next)')
         result = caller(messages)
+        if check_user_skip(0):
+            print(f"\n[SKIP] User pressed Enter: Skipping Question {question['number']} immediately!\n", flush=True)
+            saved_answers = [clean_answer_value(a) for a in answer_lines if a and not is_unanswered_placeholder(a)]
+            return {'answers': saved_answers if saved_answers else ['SKIPPED'], 'explanation': 'Skipped by user'}
         (directory / f'{question["id"]}-round{round_number}.json').write_text(json.dumps(result, indent=2), encoding='utf-8')
         if result.get('command_requests'):
             raise ValueError('AI requested unsupported shell commands')
@@ -839,7 +880,11 @@ def investigation_leads(question, directory):
 
 def main():
     os.umask(0o077)
-    print('Forensics engine: active-solver-v4', flush=True)
+    if os.environ.get('SKIP_FORENSICS') == '1':
+        print('Forensics engine: SKIP_FORENSICS=1 set, skipping all forensics questions.', flush=True)
+        return 0
+
+    print('Forensics engine: active-solver-v4 (Press ENTER anytime to skip to next question)', flush=True)
     engine = Path(__file__).resolve().parents[1]
     directory = engine / 'data' / 'forensics' / str(time.time_ns())
     directory.mkdir(parents=True, mode=0o700)
@@ -861,10 +906,24 @@ def main():
             results.append(entry)
             continue
 
-        if valid_answers and len(valid_answers) < len(placeholders):
-            print(f"Question {question['number']}: Partial answers on Desktop ({len(valid_answers)}/{len(placeholders)}); investigating remaining...", flush=True)
+        if valid_answers:
+            print(f"\nQuestion {question['number']}: Found existing desktop answers ({len(valid_answers)}/{len(placeholders)}: {valid_answers})", flush=True)
+            print(f"Question {question['number']}: [Press ENTER within 4s to KEEP these and skip, or wait to investigate...]", flush=True)
+            if check_user_skip(timeout=4):
+                print(f"Question {question['number']}: Keeping existing desktop answers and skipping investigation!\n", flush=True)
+                entry['status'] = 'FILLED_UNVERIFIED_SCORE'
+                entry['answers'] = valid_answers
+                results.append(entry)
+                continue
         else:
-            print(f"Forensics: Attempting to solve Question {question['number']}...", flush=True)
+            print(f"\nQuestion {question['number']}: [Press ENTER within 2s to skip this question...]", flush=True)
+            if check_user_skip(timeout=2):
+                print(f"Question {question['number']}: Skipped by user!\n", flush=True)
+                entry['status'] = 'SKIPPED_BY_USER'
+                results.append(entry)
+                continue
+
+        print(f"Forensics: Investigating Question {question['number']} (Press ENTER anytime to skip)...", flush=True)
         try:
             source = Path(os.environ.get('README_FILE') or engine / 'data/auto-source.html')
             html = source.read_text(encoding='utf-8') if source.exists() else ''

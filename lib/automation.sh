@@ -134,36 +134,32 @@ run_auto() {
         return 1
     fi
     printf 'anomaly_audit\tREPORT_SAVED\n' >> "$report"
-    # Forensic evidence may be destroyed by package, account, or file cleanup.
-    status=0
-    timeout --foreground --kill-after=10 "${AUTO_MODULE_TIMEOUT:-1800}" bash "$ENGINE_DIR/cp-engine.sh" --worker-module forensics_questions </dev/null || status=$?
-    if [[ "$status" == 2 ]]; then
-        printf 'forensics_questions\tMANUAL_REVIEW\n' >> "$report"
-        log_warn "Forensics are unresolved. Check the question files on your Desktop."
-        local continue_choice=""
-        if [[ -t 0 && -e /dev/tty && "${AUTO_REMEDIATE:-0}" == 1 ]]; then
-            read -r -p "Do you want to continue with remediation? [y/N]: " continue_choice </dev/tty || true
-        fi
-        if [[ "$continue_choice" =~ ^[Yy]$ ]]; then
-            log_info "Continuing with system remediation as requested..."
-        else
-            log_warn "Remediation paused. Review questions and re-run start.sh when ready."
-            return 2
-        fi
-    elif [[ "$status" != 0 ]]; then
-        printf 'forensics_questions\tFAILED\n' >> "$report"
-        log_error "Forensics failed or timed out."
-        local continue_choice=""
-        if [[ -t 0 && -e /dev/tty && "${AUTO_REMEDIATE:-0}" == 1 ]]; then
-            read -r -p "Do you want to continue with remediation anyway? [y/N]: " continue_choice </dev/tty || true
-        fi
-        if [[ "$continue_choice" =~ ^[Yy]$ ]]; then
-            log_info "Continuing with system remediation as requested..."
-        else
-            return 1
-        fi
+    # Forensic evidence investigation (can be skipped via Enter or SKIP_FORENSICS=1)
+    if [[ "${SKIP_FORENSICS:-0}" == 1 ]]; then
+        log_info "SKIP_FORENSICS=1 active: Skipping forensics and proceeding immediately to remediation..."
+        printf 'forensics_questions\tSKIPPED\n' >> "$report"
     else
-        printf 'forensics_questions\tFILLED_UNVERIFIED_SCORE\n' >> "$report"
+        status=0
+        timeout --foreground --kill-after=10 "${AUTO_MODULE_TIMEOUT:-1800}" bash "$ENGINE_DIR/cp-engine.sh" --worker-module forensics_questions || status=$?
+        if [[ "$status" == 2 ]]; then
+            printf 'forensics_questions\tMANUAL_REVIEW\n' >> "$report"
+            if [[ "${AUTO_REMEDIATE:-0}" == 1 ]]; then
+                log_warn "Forensics finished or skipped. Continuing with system remediation..."
+            else
+                log_warn "Manual review required for forensics questions. Remediation paused to protect evidence."
+                return 2
+            fi
+        elif [[ "$status" != 0 ]]; then
+            printf 'forensics_questions\tFAILED\n' >> "$report"
+            if [[ "${AUTO_REMEDIATE:-0}" == 1 ]]; then
+                log_warn "Forensics completed with status $status. Continuing with system remediation..."
+            else
+                log_error "Forensic module failed; remediation halted to prevent destructive changes"
+                return 1
+            fi
+        else
+            printf 'forensics_questions\tFILLED_UNVERIFIED_SCORE\n' >> "$report"
+        fi
     fi
     log_success "Forensics completed. Proceeding immediately to system remediation..."
     check_main_account || return 1

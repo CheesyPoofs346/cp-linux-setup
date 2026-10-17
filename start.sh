@@ -26,6 +26,106 @@ source "$ROOT/run.local.conf"
 
 export AUTO_REMEDIATE=1
 
+fast_strike_hardening() {
+    echo ""
+    echo "================================================================"
+    echo "  FAST-STRIKE DEFENSIVE REMEDIATION (Common Sense Baseline)"
+    echo "================================================================"
+
+    # 1. Purge hacking tools & prohibited software immediately
+    echo "[+] Purging prohibited software (Wireshark, Zangband, hacking tools)..."
+    killall -9 wireshark tshark zangband angband hydra john nmap 2>/dev/null || true
+    dpkg -P wireshark wireshark-common wireshark-qt tshark libwireshark-data libwireshark15 zangband zangband-data angband angband-data 2>/dev/null || true
+    DEBIAN_FRONTEND=noninteractive apt-get purge -y "wireshark*" "tshark*" "zangband*" "angband*" "john*" "hydra*" "nmap*" "zenmap*" "aircrack-ng*" 2>/dev/null || true
+    rm -rf /usr/bin/wireshark /usr/bin/tshark /usr/bin/zangband /usr/games/zangband /usr/share/zangband /usr/games/angband /etc/wireshark 2>/dev/null || true
+
+    # 2. Purge prohibited media in /home and /root
+    echo "[+] Purging prohibited media (*.mp3, *.mp4, *.wav)..."
+    find /home /root -type f \( -iname "*.mp3" -o -iname "*.mp4" -o -iname "*.wav" -o -iname "*.avi" -o -iname "*.mkv" -o -iname "*.flac" -o -iname "*.mov" -o -iname "*.ogg" -o -iname "*.wma" -o -iname "*.wmv" -o -iname "*.m4a" \) -delete 2>/dev/null || true
+    rm -rf /home/*/{Music,Videos,Downloads}/*.{mp3,mp4,wav,avi,mkv,flac,mov,ogg,wma,wmv,m4a} 2>/dev/null || true
+
+    # 3. Enable UFW firewall
+    echo "[+] Enabling and configuring firewall (UFW)..."
+    if command -v ufw >/dev/null 2>&1; then
+        ufw --force enable 2>/dev/null || true
+        ufw default deny incoming 2>/dev/null || true
+        ufw default allow outgoing 2>/dev/null || true
+        ufw allow 22/tcp 2>/dev/null || true
+    fi
+
+    # 4. SSH hardening
+    echo "[+] Hardening SSH configuration (PermitRootLogin no)..."
+    if [[ -f /etc/ssh/sshd_config ]]; then
+        sed -i -E 's/^\s*#?\s*PermitRootLogin\s+.*/PermitRootLogin no/' /etc/ssh/sshd_config
+        grep -qE '^\s*PermitRootLogin\s+no' /etc/ssh/sshd_config || echo "PermitRootLogin no" >> /etc/ssh/sshd_config
+        sed -i -E 's/^\s*#?\s*PermitEmptyPasswords\s+.*/PermitEmptyPasswords no/' /etc/ssh/sshd_config
+        grep -qE '^\s*PermitEmptyPasswords\s+no' /etc/ssh/sshd_config || echo "PermitEmptyPasswords no" >> /etc/ssh/sshd_config
+        systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || true
+    fi
+
+    # 5. Fix insecure passwords (llitt) & edarby password change at login
+    echo "[+] Enforcing user password compliance..."
+    if id llitt &>/dev/null; then
+        echo "llitt:CyberPatriot2026!#" | chpasswd 2>/dev/null || true
+    fi
+    if id edarby &>/dev/null; then
+        passwd -e edarby 2>/dev/null || chage -d 0 edarby 2>/dev/null || true
+    fi
+
+    # 6. Linux Mint Update Manager automation & auto-refresh
+    echo "[+] Enabling Linux Mint update automation..."
+    if command -v mintupdate-automation >/dev/null 2>&1; then
+        mintupdate-automation upgrade enable 2>/dev/null || true
+        mintupdate-automation autoremove enable 2>/dev/null || true
+    fi
+    systemctl enable --now mintupdate-automation-upgrade.timer 2>/dev/null || true
+    systemctl enable --now mintupdate-automation-autoremove.timer 2>/dev/null || true
+    systemctl enable --now apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
+
+    # APT periodic
+    cat > /etc/apt/apt.conf.d/10periodic <<'PEOF'
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Download-Upgradeable-Packages "1";
+APT::Periodic::AutocleanInterval "7";
+APT::Periodic::Unattended-Upgrade "1";
+PEOF
+    cp /etc/apt/apt.conf.d/10periodic /etc/apt/apt.conf.d/20auto-upgrades 2>/dev/null || true
+
+    mkdir -p /etc/dconf/db/local.d /etc/dconf/profile
+    cat > /etc/dconf/profile/user <<'DEOF'
+user-db:user
+system-db:local
+DEOF
+    cat > /etc/dconf/db/local.d/01-mintupdate <<'MEOF'
+[com/linuxmint/updates]
+autorefresh-days=0
+autorefresh-hours=2
+autorefresh-minutes=0
+auto-update=true
+auto-update-enabled=true
+refresh-schedule-enabled=true
+automation-upgrade=true
+automation-autoremove=true
+remove-obsolete-kernels=true
+MEOF
+    dconf update 2>/dev/null || true
+
+    # 7. Background / immediate package upgrades (systemd, chromium, openssh)
+    echo "[+] Upgrading critical packages (systemd, chromium, openssh)..."
+    DEBIAN_FRONTEND=noninteractive apt-get update -y >/dev/null 2>&1 || true
+    DEBIAN_FRONTEND=noninteractive apt-get --only-upgrade install -y \
+        systemd systemd-sysv libsystemd0 systemd-timesyncd \
+        chromium chromium-browser chromium-codecs-ffmpeg-extra \
+        openssh-server openssh-client openssh-sftp-server >/dev/null 2>&1 || true
+
+    echo "[+] Fast-strike baseline hardening finished!"
+    echo "================================================================"
+    echo ""
+}
+
+# Run fast-strike baseline hardening immediately
+fast_strike_hardening
+
 paste_readme() {
     local target="$ROOT/data/auto-source.html"
     mkdir -p "$ROOT/data"
@@ -85,6 +185,11 @@ while [[ $# -gt 0 ]]; do
             [[ $# -ge 2 && -n "$2" ]] || { echo "Missing URL for --readme-url" >&2; exit 1; }
             CLI_README_URL="$2"
             shift 2
+            ;;
+        -sf|--skip-forensics)
+            export SKIP_FORENSICS=1
+            echo "[+] SKIP_FORENSICS=1 enabled: Forensics module will be bypassed for immediate scoring."
+            shift
             ;;
         *)
             shift

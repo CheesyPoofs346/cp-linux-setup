@@ -5,6 +5,10 @@ source "$SCRIPT_DIR/../lib/utils.sh"
 source "$SCRIPT_DIR/../lib/openrouter.sh"
 
 run_forensics_questions() {
+    if [[ "${SKIP_FORENSICS:-0}" == 1 ]]; then
+        log_info "Forensics skipped via SKIP_FORENSICS=1"
+        return 0
+    fi
     check_dependencies python3 || return 1
     check_openrouter_config || return 1
     export AI_PROVIDER OPENROUTER_API_KEY OPENROUTER_MODEL
