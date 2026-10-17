@@ -791,6 +791,54 @@ fix_null_passwords() {
     return 0
 }
 
+# Check README for authorized users with insecure passwords (< 12 chars) and update them
+fix_insecure_passwords() {
+    log_section "Checking for Insecure User Passwords"
+
+    local main_user
+    main_user=$(get_main_user)
+    local protected_user="${PROTECTED_USER:-$main_user}"
+
+    local readme_file="${README_FILE:-$SCRIPT_DIR/../data/auto-source.html}"
+    if [[ ! -f "$readme_file" && -f "$SCRIPT_DIR/../data/auto-source.html" ]]; then
+        readme_file="$SCRIPT_DIR/../data/auto-source.html"
+    fi
+
+    if [[ ! -f "$readme_file" ]]; then
+        return 0
+    fi
+
+    local fixed_count=0
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        local u="" p=""
+        if [[ "$line" =~ ([a-zA-Z0-9_.-]+)[[:space:]]*:[[:space:]]*([^[:space:]<()]+) ]]; then
+            u="${BASH_REMATCH[1],,}"
+            p="${BASH_REMATCH[2]}"
+        elif [[ "$line" =~ ([a-zA-Z0-9_.-]+)[[:space:]]*\([Pp]assword:[[:space:]]*([^[:space:]<()]+)\) ]]; then
+            u="${BASH_REMATCH[1],,}"
+            p="${BASH_REMATCH[2]}"
+        fi
+
+        if [[ -n "$u" && -n "$p" && ${#p} -lt 12 ]]; then
+            if [[ "$u" != "$main_user" && "$u" != "$protected_user" && "$u" != "root" ]]; then
+                if user_exists "$u"; then
+                    log_warn "User $u has weak password in README (${#p} chars). Updating..."
+                    echo "$u:$DEFAULT_PASSWORD" | chpasswd
+                    log_success "Updated password for $u to comply with password policy"
+                    log_score 5 "Changed insecure password for user $u"
+                    fixed_count=$((fixed_count + 1))
+                fi
+            fi
+        fi
+    done < "$readme_file"
+
+    if [[ $fixed_count -gt 0 ]]; then
+        log_success "Remediated $fixed_count insecure user password(s)"
+    fi
+    return 0
+}
+
 # Enforce password policies
 enforce_password_policies() {
     log_section "Enforcing Password Policies"
@@ -1151,6 +1199,7 @@ run_user_auditing() {
     create_missing_users
     add_users_to_groups
     fix_null_passwords
+    fix_insecure_passwords
     enforce_password_policies
     check_password_hashing
     disable_system_user_logins

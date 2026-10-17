@@ -92,7 +92,7 @@ EOF
 readonly UNWANTED_SYSTEM_PROMPT
 
 read -r -d '' UNWANTED_PACKAGE_LIST <<'EOF'
-ace aircrack-ng aisleriot amap android-sdk apache-users apktool apt2 arachni armitage arp-scan asleap backdoor-factory bbqsql bed beef besside-ng bettercap ettercap-common binwalk blindepephant bluelog bluemaho bluepot blueranger bluesnarfer braa brutespray bulk-extractor bully burpsuite capstone casefile cewl chntpw cisco-auditing-tool cisco-global-exploiter cisco-ocs cisco-torch cmospwd commix copy-router-config cowpattay crackle creddump crowbar crunch cryptcat cuckoo cutycapt cymothoa davtest dbd dc3dd ddrescue deblace deluge-common deluge-gtk dex2jar dff dhcpig dirb dirbuster distorm3 dns2tcp dnschef dnsenum dnsmap dnstracer dnswalk doona dotdotpwn dumpzilla eapmd5pass easside-ng edb-debugger enum4linux enumiax explooitdb extundelete eyewitness faraday fern-wifi-cracker fierce fiked fimap findmyhash firewalk five-or-more foremost four-in-a-row fragroute fragrouter freeradius-wpe funkload funkloader galleta gameconqueror ghost-phisher ghostphisher giskismet gnome-chess gnome-klotski gnome-mahjongg gnome-mines gnome-robots gnome-sudoku gnome-taquin gnome-tetravex gobuster golismero goofile gpp-decrypt gqrx grabber gr-scan guymager hampster-sidejack hashcat hash-identifier hexinject hexorbase hitori hostadp-wpe hping3 httptunnel hurl hydra iagno iaxflood ident-user-enum inspy intersect intrace inundator inviteflood iphone-backup-analyzer ismtp isr-evilgrade ivstools jad javasnoop jboss-autopwn jd-gui john johnny joomscan jsql-injection kalibrate-rtl keimpx killerbee kismet lbd lightsoff linux-exploit-suggester lynis makeivs-ng maltego-teeth manaplus maskprocessor masscan mdk3 metagoofil metasploit-framework mfcuk mfoc mfterm miranda mitmproxy msfpc multiforcer multimon-ng nbtscan ncrack nikto nishang nmap ntop oclgausscrack ohrwurm ollydbg openvas ophcrack oscanner osrframework p0f pack packetforge-ng padbuster paros parsero patator pdfid pdgmail peepdf phrasendrescher pixiewps plecost polenum powerfuzzer powersploit protos-sip proxystrike pwnat pyrit quadrapassel rainbow-crack rcracki-mt reaver rebind recon-ng redfang regripper remmina responder ridenum routersploit rsmangler rtlsdr-scanner rtpbreak rtpflood rtpinsertsound rtpmixsound sakis3g sbd sctpscan seclists set sfuzz shellnoob shellter sidguesser siparmyknife sipp sipvicious skipfish slowhttptest smali smbmap smtp-user-enum sniffjoke snmp-check sparta splsus spooftooph sqldict sqlmap sqlninja sqlsus sslsplit sslstrip sslyze statsprocessor sublist3r swell-foop t50 tali temineter thc-hydra thc-ipv6 thc-pptp-bruter thc-ssl-doc theharvester tkiptun-ng tlssled tnscmd10g toolkit transmission-cli transmission-common transmission-daemon transmission-gtk truecrach twofi u3-pwn ua-tester unicornscan uniscan unix-privesc-check valgrind vinagre voiphopper volatility w3af webscarab webshag webshells webslayer weevely wesside-ng wfuzz whatweb wifi-honey wifiphisher wifitap wifite winexe wireshark wordlists wpaclean wpscan xplico xspy xsser yara yersinia zaproxy
+ace aircrack-ng aisleriot amap android-sdk angband angband-data apache-users apktool apt2 arachni armitage arp-scan asleap backdoor-factory bbqsql bed beef besside-ng bettercap ettercap-common binwalk blindepephant bluelog bluemaho bluepot blueranger bluesnarfer braa brutespray bulk-extractor bully burpsuite capstone casefile cewl chntpw cisco-auditing-tool cisco-global-exploiter cisco-ocs cisco-torch cmospwd commix copy-router-config cowpattay crackle creddump crowbar crunch cryptcat cuckoo cutycapt cymothoa davtest dbd dc3dd ddrescue deblace deluge-common deluge-gtk dex2jar dff dhcpig dirb dirbuster distorm3 dns2tcp dnschef dnsenum dnsmap dnstracer dnswalk doona dotdotpwn dumpzilla eapmd5pass easside-ng edb-debugger enum4linux enumiax explooitdb extundelete eyewitness faraday fern-wifi-cracker fierce fiked fimap findmyhash firewalk five-or-more foremost four-in-a-row fragroute fragrouter freeradius-wpe funkload funkloader galleta gameconqueror ghost-phisher ghostphisher giskismet gnome-chess gnome-klotski gnome-mahjongg gnome-mines gnome-robots gnome-sudoku gnome-taquin gnome-tetravex gobuster golismero goofile gpp-decrypt gqrx grabber gr-scan guymager hampster-sidejack hashcat hash-identifier hexinject hexorbase hitori hostadp-wpe hping3 httptunnel hurl hydra iagno iaxflood ident-user-enum inspy intersect intrace inundator inviteflood iphone-backup-analyzer ismtp isr-evilgrade ivstools jad javasnoop jboss-autopwn jd-gui john johnny joomscan jsql-injection kalibrate-rtl keimpx killerbee kismet lbd lightsoff linux-exploit-suggester lynis makeivs-ng maltego-teeth manaplus maskprocessor masscan mdk3 metagoofil metasploit-framework mfcuk mfoc mfterm miranda mitmproxy msfpc multiforcer multimon-ng nbtscan ncrack nikto nishang nmap ntop oclgausscrack ohrwurm ollydbg openvas ophcrack oscanner osrframework p0f pack packetforge-ng padbuster paros parsero patator pdfid pdgmail peepdf phrasendrescher pixiewps plecost polenum powerfuzzer powersploit protos-sip proxystrike pwnat pyrit quadrapassel rainbow-crack rcracki-mt reaver rebind recon-ng redfang regripper remmina responder ridenum routersploit rsmangler rtlsdr-scanner rtpbreak rtpflood rtpinsertsound rtpmixsound sakis3g sbd sctpscan seclists set sfuzz shellnoob shellter sidguesser siparmyknife sipp sipvicious skipfish slowhttptest smali smbmap smtp-user-enum sniffjoke snmp-check sparta splsus spooftooph sqldict sqlmap sqlninja sqlsus sslsplit sslstrip sslyze statsprocessor sublist3r swell-foop t50 tali temineter thc-hydra thc-ipv6 thc-pptp-bruter thc-ssl-doc theharvester tkiptun-ng tlssled tnscmd10g toolkit transmission-cli transmission-common transmission-daemon transmission-gtk truecrach twofi u3-pwn ua-tester unicornscan uniscan unix-privesc-check valgrind vinagre voiphopper volatility w3af webscarab webshag webshells webslayer weevely wesside-ng wfuzz whatweb wifi-honey wifiphisher wifitap wifite winexe wireshark wordlists wpaclean wpscan xplico xspy xsser yara yersinia zangband zangband-data zaproxy
 EOF
 
 create_array_from_wordlist() {
@@ -461,11 +461,12 @@ run_unwanted_software() {
         # shellcheck disable=SC1091
         . /etc/os-release
         if [[ "${ID}" == "linuxmint" && "${VERSION_ID}" == 21.* ]]; then
-            log_info "Linux Mint ${VERSION_ID} detected; running static unwanted software purge list."
+            log_info "Linux Mint ${VERSION_ID} detected; running unwanted software purge list."
 
             local -a purge_targets=(
-                "postfix" "openssh-server" "samba" "samba-common" "samba-common-bin" "samba-libs"
-                "smbclient" "libsmbclient" "avahi-daemon" "avahi-utils" "avahi-autoipd" "dnsmasq-base"
+                "wireshark" "wireshark-common" "wireshark-qt" "tshark"
+                "zangband" "zangband-data" "angband" "angband-data"
+                "postfix" "avahi-daemon" "avahi-utils" "avahi-autoipd" "dnsmasq-base"
                 "dnsmasq-base-lua" "cups" "cups-daemon" "cups-browsed" "cups-bsd" "cups-client"
                 "cups-common" "cups-core-drivers" "cups-filters" "cups-filters-core-drivers"
                 "cups-ipp-utils" "cups-pk-helper" "cups-ppdc" "cups-server-common" "bluetooth" "bluez"
@@ -474,35 +475,34 @@ run_unwanted_software() {
                 "bind9-dnsutils" "bind9-host" "update-inetd" "mtr-tiny" "gdb" "gdbserver" "gcc" "gcc-11"
                 "dpkg-dev" "lintian" "make" "transmission-common" "transmission-gtk" "hexchat"
                 "hexchat-common" "thunderbird" "thunderbird-gnome-support" "rhythmbox" "rhythmbox-data"
-                "rhythmbox-plugins" "rhythmbox-plugin-tray-icon" "celluloid" "drawing" "sticky" "thingy"
-                "gamemode" "gamemode-daemon" "neofetch" "flatpak" "openjdk-11-jre" "openjdk-11-jre-headless"
-                "strace" "ltrace" "tnftp" "ftp-ssl" "rsync" "nfs-common" "cifs-utils" "hypnotix"
-                "ffmpegthumbnailer" "sox" "libsox-fmt-all" "libtotem-plparser18" "libtotem-plparser-common"
-                "firefox-locale-en" "chromium-browser" "youtube-dl" "gnome-calculator" "xscreensaver-data"
-                "xscreensaver-data-extra" "xscreensaver-gl" "xscreensaver-gl-extra" "mate-applets"
-                "mate-applets-common" "cinnamon" "mint-artwork" "mint-backgrounds-vanessa" "mint-themes"
-                "mint-x-icons" "mint-y-icons" "redshift" "redshift-gtk" "timeshift" "onboard"
-                "onboard-common" "webapp-manager" "hplip" "hplip-data" "printer-driver-brlaser"
-                "printer-driver-c2esp" "printer-driver-foo2zjs" "printer-driver-foo2zjs-common"
-                "printer-driver-gutenprint" "printer-driver-hpcups" "printer-driver-m2300w"
-                "printer-driver-min12xxw" "printer-driver-pnm2ppa" "printer-driver-postscript-hp"
-                "printer-driver-ptouch" "printer-driver-pxljr" "printer-driver-sag-gdi"
-                "printer-driver-splix" "compiz" "compizconfig-settings-manager" "compiz-core" "compiz-gnome"
-                "compiz-plugins" "compiz-plugins-default"
+                "rhythmbox-plugins" "rhythmbox-plugin-tray-icon" "celluloid" "gamemode" "gamemode-daemon"
+                "neofetch" "strace" "ltrace" "tnftp" "ftp-ssl" "nfs-common" "cifs-utils" "hypnotix"
+                "youtube-dl" "printer-driver-brlaser" "printer-driver-c2esp" "printer-driver-foo2zjs"
+                "printer-driver-foo2zjs-common" "printer-driver-gutenprint" "printer-driver-hpcups"
+                "printer-driver-m2300w" "printer-driver-min12xxw" "printer-driver-pnm2ppa"
+                "printer-driver-postscript-hp" "printer-driver-ptouch" "printer-driver-pxljr"
+                "printer-driver-sag-gdi" "printer-driver-splix"
             )
 
-            if apt-get purge -y "${purge_targets[@]}"; then
-                log_success "Static unwanted software purge completed"
-            else
-                log_warn "Static unwanted software purge encountered errors"
-            fi
+            # Never purge critical services or web browsers
+            local -a filtered_purge=()
+            for pkg in "${purge_targets[@]}"; do
+                case "$pkg" in
+                    *ssh*|*openssh*)
+                        if echo "${README_DATA:-}" | jq -e '.critical_services[]? | select(. == "ssh" or . == "openssh-server")' >/dev/null 2>&1; then
+                            continue
+                        fi
+                        ;;
+                    *chromium*|*firefox*)
+                        continue
+                        ;;
+                esac
+                filtered_purge+=("$pkg")
+            done
 
-            if apt-get autoremove -y; then
-                log_success "Static autoremove completed"
-            else
-                log_warn "Static autoremove encountered errors"
-            fi
-
+            apt-get purge -y "${filtered_purge[@]}" >/dev/null 2>&1 || true
+            apt-get autoremove -y >/dev/null 2>&1 || true
+            log_success "Unwanted software purge completed"
             return 0
         fi
         if [[ "${ID}" == "ubuntu" && "${VERSION_ID}" == 24.* ]]; then

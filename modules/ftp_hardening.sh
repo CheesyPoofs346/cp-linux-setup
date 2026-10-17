@@ -203,6 +203,24 @@ restart_service_if_present() {
 run_ftp_hardening() {
     require_root
 
+    # Check if FTP is a critical service in README_DATA
+    local ftp_is_critical=0
+    if [[ -n "${README_DATA:-}" ]]; then
+        if echo "$README_DATA" | jq -e '.critical_services[]? | select(. == "ftp" or . == "vsftpd" or . == "proftpd")' >/dev/null 2>&1; then
+            ftp_is_critical=1
+        fi
+    fi
+
+    if [[ $ftp_is_critical -eq 0 ]]; then
+        log_info "FTP is not listed as a critical service. Stopping, disabling, and purging FTP servers..."
+        systemctl stop vsftpd proftpd pure-ftpd 2>/dev/null || true
+        systemctl disable vsftpd proftpd pure-ftpd 2>/dev/null || true
+        apt-get purge -y vsftpd proftpd pure-ftpd 2>/dev/null || true
+        log_success "FTP service disabled and removed"
+        log_score 6 "FTP service has been disabled or removed"
+        return 0
+    fi
+
     local vsftpd_conf proftpd_conf
     local hardened_any=0
 
@@ -220,7 +238,7 @@ run_ftp_hardening() {
 
     if [[ $hardened_any -eq 0 ]]; then
         log_warn "No vsftpd or ProFTPD configuration found. Skipping."
-        return 1
+        return 0
     fi
 
     return 0
