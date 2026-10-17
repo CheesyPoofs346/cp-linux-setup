@@ -489,7 +489,11 @@ def call_ai(messages, model=None):
         raise ValueError('Provider response has no valid assistant message')
     content = message.get('content')
     if not isinstance(content, str) or not content.strip():
-        raise ValueError('No response text received')
+        reasoning = message.get('reasoning_content') or message.get('reasoning') or message.get('text')
+        if isinstance(reasoning, str) and reasoning.strip():
+            content = reasoning
+        else:
+            raise ValueError('No response text received')
     diagnostic = save_ai_diagnostic('model-content', payload['model'], content, key)
     if choices[0].get('finish_reason') == 'length':
         raise ValueError(f'Model exhausted output budget; refusing partial answer. Diagnostic: {diagnostic}')
@@ -745,6 +749,16 @@ def main():
     results = []
     for question in questions:
         entry = {'id': question['id'], 'number': question['number'], 'path': question['path']}
+        lines = question['content'].splitlines()
+        existing_answers = [m.group(1).strip() for line in lines for m in [re.match(r'^\s*ANSWER\s*:\s*(\S.*)$', line, re.I)] if m]
+        placeholders = [line for line in lines if re.match(r'^\s*ANSWER\s*:', line, re.I)]
+        if not os.environ.get('FORENSICS_FORCE_RESOLVE') and placeholders and len(existing_answers) == len(placeholders):
+            print(f"Question {question['number']}: Already answered on Desktop -> {existing_answers}", flush=True)
+            entry['status'] = 'FILLED_UNVERIFIED_SCORE'
+            entry['answers'] = existing_answers
+            results.append(entry)
+            continue
+
         print(f"Forensics: Attempting to solve Question {question['number']}...", flush=True)
         try:
             source = Path(os.environ.get('README_FILE') or engine / 'data/auto-source.html')

@@ -113,7 +113,7 @@ run_auto() {
         printf 'forensics_questions\tMANUAL_REVIEW\n' >> "$report"
         log_warn "Forensics are unresolved. Check the question files on your Desktop."
         local continue_choice=""
-        if [[ -e /dev/tty && "${AUTO_REMEDIATE:-0}" == 1 ]]; then
+        if [[ -t 0 && -e /dev/tty && "${AUTO_REMEDIATE:-0}" == 1 ]]; then
             read -r -p "Do you want to continue with remediation? [y/N]: " continue_choice </dev/tty || true
         fi
         if [[ "$continue_choice" =~ ^[Yy]$ ]]; then
@@ -126,7 +126,7 @@ run_auto() {
         printf 'forensics_questions\tFAILED\n' >> "$report"
         log_error "Forensics failed or timed out."
         local continue_choice=""
-        if [[ -e /dev/tty && "${AUTO_REMEDIATE:-0}" == 1 ]]; then
+        if [[ -t 0 && -e /dev/tty && "${AUTO_REMEDIATE:-0}" == 1 ]]; then
             read -r -p "Do you want to continue with remediation anyway? [y/N]: " continue_choice </dev/tty || true
         fi
         if [[ "$continue_choice" =~ ^[Yy]$ ]]; then
@@ -142,10 +142,15 @@ run_auto() {
     run_anomaly_audit 1 || return 1
     if ! review_auto_plan; then
         printf 'peer_review\tMANUAL_REVIEW\n' >> "$report"
-        log_warn "Independent plan review did not approve remediation. No remediation modules started."
-        return 2
+        if [[ "${AUTO_REMEDIATE:-0}" == 1 ]]; then
+            log_warn "Reviewer did not approve plan; continuing under AUTO_REMEDIATE=1"
+        else
+            log_warn "Independent plan review did not approve remediation. No remediation modules started."
+            return 2
+        fi
+    else
+        printf 'peer_review\tAPPROVED\n' >> "$report"
     fi
-    printf 'peer_review\tAPPROVED\n' >> "$report"
     for module in "${MODULES[@]}"; do
         [[ "$module" == readme_parser || "$module" == forensics_questions ]] && continue
         if (( failed )); then

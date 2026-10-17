@@ -300,4 +300,10 @@ class ForensicsTests(unittest.TestCase):
         self.assertEqual(answers, ['192.9.137.137'])
 
 
+    def test_already_answered_skips_investigation(self):
+        self.question.write_bytes(b'Identify the file.\r\nANSWER: 192.9.137.137\r\n')
+        with patch.dict(os.environ, {'FORENSICS_DIR': str(self.desktop), 'README_FILE': ''}), patch.object(agent, '__file__', str(self.runner / 'lib/forensics_agent.py')), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(agent.main(), 0)
+
+
 if __name__ == '__main__': unittest.main()
