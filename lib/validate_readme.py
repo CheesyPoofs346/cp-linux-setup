@@ -6,6 +6,9 @@ import sys
 from html.parser import HTMLParser
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from readme_extract import SERVICE_ALIASES
+
 
 class Sections(HTMLParser):
     def __init__(self):
@@ -104,7 +107,7 @@ def validate(html, data):
                 name = re.search(r'[a-z0-9_-]+', line)
                 if not name:
                     raise ValueError('Unrecognized required service entry; review README manually')
-                services.append({'openssh-server': 'ssh', 'sshd': 'ssh'}.get(name[0], name[0]))
+                services.append(SERVICE_ALIASES.get(name[0], name[0]))
         if role:
             if role in found:
                 if not auto_rem:

@@ -28,6 +28,7 @@ DESIRED_MODULE_ORDER=(
     user_auditing
     account_policy
     local_policy
+    extra_hardening
     security_policy
     ssh_hardening
     ftp_hardening

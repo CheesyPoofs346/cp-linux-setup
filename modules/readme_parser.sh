@@ -130,26 +130,35 @@ parse_readme() {
     echo "$plain_text" > "$SCRIPT_DIR/../data/readme_plaintext.txt"
     log_debug "Saved plain text to: $SCRIPT_DIR/../data/readme_plaintext.txt"
 
-    # Use OpenRouter to extract structured information
-    log_info "Extracting structured information using AI..."
-    local ai_response
-    if ! ai_response=$(invoke_readme_extraction "$plain_text" "$readme_path"); then
-        log_error "Failed to extract README information"
-        return 1
+    # Deterministic extraction first; AI only fills free-text gaps (or parses when no sections exist).
+    local json_data="" ai_response="" det_file hints ai_json
+    det_file=$(mktemp)
+    if python3 "$SCRIPT_DIR/../lib/readme_extract.py" "$readme_path" "$det_file"; then
+        json_data=$(cat "$det_file")
+        hints=$(jq -r '.unparsed_hints | join(" ")' "$det_file")
+        if [[ -n "$hints" ]]; then
+            if [[ -n "${OPENROUTER_API_KEY:-}" ]]                 && ai_response=$(invoke_readme_extraction "$plain_text" "$readme_path")                 && ai_json=$(extract_json_from_response "$ai_response"); then
+                log_info "README free text mentions ($hints); AI fills only those fields"
+                json_data=$(jq --argjson ai "$ai_json" --arg h "$hints"                     'reduce ($h | split(" ")[]) as $f (.; .[$f] = (((.[$f] // []) + ($ai[$f] // [])) | unique_by(tojson)))' <<<"$json_data")                     || log_warn "Could not merge AI gap fill; using deterministic parse only"
+            else
+                log_warn "README mentions ($hints) but AI gap fill unavailable; review those items by hand"
+            fi
+        fi
+    else
+        log_info "No standard user sections found; extracting with AI..."
+        if ! ai_response=$(invoke_readme_extraction "$plain_text" "$readme_path"); then
+            rm -f -- "$det_file"
+            log_error "Failed to extract README information"
+            return 1
+        fi
+        echo "$ai_response" > "$SCRIPT_DIR/../data/readme_ai_response.txt"
+        if ! json_data=$(extract_json_from_response "$ai_response"); then
+            rm -f -- "$det_file"
+            log_error "Failed to extract JSON from AI response"
+            return 1
+        fi
     fi
-
-    log_debug "AI Response:"
-    log_debug "$ai_response"
-
-    # Save raw AI response
-    echo "$ai_response" > "$SCRIPT_DIR/../data/readme_ai_response.txt"
-
-    # Extract and validate JSON
-    local json_data
-    if ! json_data=$(extract_json_from_response "$ai_response"); then
-        log_error "Failed to extract JSON from AI response"
-        return 1
-    fi
+    rm -f -- "$det_file"
 
     # Validate JSON structure
     if ! echo "$json_data" | jq -e '.all_users' >/dev/null 2>&1; then
