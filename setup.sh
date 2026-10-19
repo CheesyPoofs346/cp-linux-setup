@@ -76,17 +76,24 @@ if [[ -z "$previous" ]]; then
         done
     fi
 fi
-read -r -p "Image README HTTPS URL or local HTML path${previous:+ (Enter uses $previous)}: " readme
-readme="${readme:-$previous}"
+if [[ "${SETUP_AUTO:-0}" == 1 ]]; then
+    readme="$previous"   # one-shot install: use the detected README; start.sh re-detects or asks if empty
+else
+    read -r -p "Image README HTTPS URL or local HTML path${previous:+ (Enter uses $previous)}: " readme
+    readme="${readme:-$previous}"
+fi
 if [[ "$readme" == https://* ]]; then
     :
+elif [[ "${SETUP_AUTO:-0}" == 1 && -z "$readme" ]]; then
+    echo 'No README found yet; start.sh will search again or ask you to paste it.'
 elif [[ -n "$readme" && -f "$readme" ]]; then
     readme=$(readlink -f "$readme")
 else
     echo 'Provide an HTTPS URL or an existing local README HTML file.' >&2
     exit 1
 fi
-read -r -p 'Question directory (Enter searches user Desktops): ' questions
+questions=''
+[[ "${SETUP_AUTO:-0}" == 1 ]] || read -r -p 'Question directory (Enter searches user Desktops): ' questions
 if [[ -n "$questions" ]]; then
     [[ -d "$questions" ]] || { echo 'Question directory does not exist.' >&2; exit 1; }
     questions=$(readlink -f "$questions")
@@ -96,7 +103,8 @@ source /etc/os-release
 unsupported=0
 if ! { [[ "$ID" == ubuntu && "$VERSION_ID" == 24.* ]] || [[ "$ID" == linuxmint && "$VERSION_ID" == 21* ]]; }; then
     echo "Detected $ID $VERSION_ID. This is outside the original supported OS versions."
-    read -r -p 'Allow an experimental run on this disposable VM? [y/N]: ' answer
+    answer=y
+    [[ "${SETUP_AUTO:-0}" == 1 ]] || read -r -p 'Allow an experimental run on this disposable VM? [y/N]: ' answer
     [[ "$answer" =~ ^[Yy]$ ]] || { echo 'Setup stopped; use a supported practice VM.' >&2; exit 1; }
     unsupported=1
 fi
