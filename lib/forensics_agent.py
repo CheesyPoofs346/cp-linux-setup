@@ -16,7 +16,10 @@ import urllib.error
 import urllib.request
 import zipfile
 
+import ipaddress
 import select
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 LIMIT = 12000
 QUESTION = re.compile(r'forensics?[ _-]*questions?[ _-]*(\d+)', re.I)
@@ -43,10 +46,24 @@ class UserSkip(Exception):
     """Operator pressed Enter to skip the current question; never an answer."""
 
 
+_skip_all = threading.Event()
+_skip_lock = threading.Lock()
+
+
 def check_user_skip(timeout=0):
-    """Returns True if the user pressed Enter on the terminal to skip."""
-    if os.environ.get('SKIP_FORENSICS') == '1':
+    """Returns True if the user pressed Enter on the terminal to skip (Enter skips every running question)."""
+    if os.environ.get('SKIP_FORENSICS') == '1' or _skip_all.is_set():
         return True
+    with _skip_lock:
+        if _skip_all.is_set():
+            return True
+        if _poll_enter(timeout):
+            _skip_all.set()
+            return True
+    return False
+
+
+def _poll_enter(timeout):
     streams = []
     if _tty_stream is not None:
         streams.append(_tty_stream)
@@ -644,7 +661,7 @@ def call_ai(messages, model=None):
     key = os.environ.get('OPENROUTER_API_KEY', '')
     if not key:
         raise ValueError('Selected provider API key is missing')
-    payload = {'model': model or os.environ['OPENROUTER_MODEL'], 'messages': messages, 'temperature': 0.1, 'max_tokens': 16384}
+    payload = {'model': model or os.environ['OPENROUTER_MODEL'], 'messages': messages, 'temperature': 0.1, 'max_tokens': int(os.environ.get('AI_MAX_TOKENS', '8000'))}
     if provider == 'nvidia' and payload['model'].startswith('z-ai/glm-'):
         payload['response_format'] = {'type': 'json_object'}
     if provider == 'nvidia' and payload['model'].startswith('nvidia/nemotron-3-'):
@@ -782,6 +799,58 @@ def apply_answers(question, answers, backup_dir):
             os.unlink(name)
 
 
+IP_RE = r'(?:(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])'
+
+
+def _public_ip(text):
+    try:
+        ip = ipaddress.ip_address(text)  # practice images may use documentation/private ranges, so only drop non-hosts
+        return not (ip.is_loopback or ip.is_unspecified or ip.is_multicast or ip.is_link_local)
+    except ValueError:
+        return False
+
+
+def fast_path(question, recon):
+    """Answer 'IP of the site we were compromised through' straight from download-origin evidence, no model needed."""
+    text = question.get('content', '').lower()
+    if not (re.search(r'ip address', text) and re.search(r'download|website|\bsite\b|external|compromis', text)):
+        return None
+    example = set(re.findall(IP_RE, question.get('content', '')))
+    strong, weak = {}, {}
+    for line in (recon.get('download_history_and_ips') or '').splitlines():
+        if line.startswith(('firefox download:', 'firefox visited IP-host URL:')) or ' user.xdg.' in line:
+            for match in re.finditer(r'https?://(' + IP_RE + r')(?=[:/\s]|$)', line):
+                if _public_ip(match[1]) and match[1] not in example:
+                    strong.setdefault(match[1], line)
+        elif ' contains IP: ' in line:
+            ip = line.rsplit(' ', 1)[-1]
+            if _public_ip(ip) and ip not in example:
+                weak.setdefault(ip, line)
+    found = strong or weak
+    if len(found) != 1:
+        return None
+    ip, line = next(iter(found.items()))
+    return {'answers': [ip], 'needs_manual_review': False, 'solved': True,
+            'explanation': 'Only public IP in the download-origin evidence: ' + line,
+            'evidence': [{'tool_id': 'e0', 'quote': line}]}
+
+
+def shrink_history(messages, keep=1500):
+    """Old tool output is already digested; trim it so later turns stay small and fast."""
+    for message in messages[2:]:
+        if message['role'] != 'user' or '"evidence_results"' not in message['content'][:40]:
+            continue
+        try:
+            payload = json.loads(message['content'])
+        except ValueError:
+            continue
+        for record in payload.get('evidence_results', []):
+            out = record.get('output')
+            if isinstance(out, str) and len(out) > keep:
+                record['output'] = out[:keep] + f'... [{len(out) - keep} chars trimmed; full text is saved as evidence {record.get("id")}]'
+        message['content'] = json.dumps(payload)
+
+
 def investigate(question, tools, directory, caller=None, readme_html='', progress=None):
     caller = caller or call_ai
     recon = gather_initial_recon()
@@ -805,7 +874,17 @@ def investigate(question, tools, directory, caller=None, readme_html='', progres
         {'role': 'user', 'content': json.dumps(user_payload, ensure_ascii=False)}
     ]
     evidence = {}
-    rounds = int(os.environ.get('FORENSICS_MAX_ROUNDS', '8'))
+    fast = fast_path(question, recon)
+    if fast:
+        try:
+            supported_answers(fast, evidence, recon=recon)
+            (directory / f'{question["id"]}-evidence.json').write_text(json.dumps(evidence, indent=2), encoding='utf-8')
+            if progress:
+                progress('answer found directly in download-origin evidence (no model turns needed)')
+            return {**fast, 'tool_requests': [], 'commands': []}
+        except ValueError:
+            pass
+    rounds = int(os.environ.get('FORENSICS_MAX_ROUNDS', '10'))
     if not 1 <= rounds <= 24:
         raise ValueError('FORENSICS_MAX_ROUNDS must be between 1 and 24')
     rejected = {}
@@ -882,6 +961,7 @@ def investigate(question, tools, directory, caller=None, readme_html='', progres
             outputs.append(record)
 
         (directory / f'{question["id"]}-evidence.json').write_text(json.dumps(evidence, indent=2), encoding='utf-8')
+        shrink_history(messages)
         feedback = 'Commands executed. Analyze results and issue next commands or provide final answer.'
         messages.extend([
             {'role': 'assistant', 'content': json.dumps(result)},
@@ -943,7 +1023,7 @@ def main():
     directories = [Path(os.environ['FORENSICS_DIR'])] if os.environ.get('FORENSICS_DIR') else list(Path('/home').glob('*/Desktop')) + [Path('/root/Desktop')]
     questions = discover(directories)
     (directory / 'questions.json').write_text(json.dumps(questions, indent=2), encoding='utf-8')
-    results = []
+    results, pending = {}, []
     for question in questions:
         entry = {'id': question['id'], 'number': question['number'], 'path': question['path']}
         lines = question['content'].splitlines()
@@ -953,59 +1033,65 @@ def main():
 
         if not os.environ.get('FORENSICS_FORCE_RESOLVE') and placeholders and len(valid_answers) == len(placeholders):
             print(f"Question {question['number']}: Already answered on Desktop -> {valid_answers}", flush=True)
-            entry['status'] = 'FILLED_UNVERIFIED_SCORE'
-            entry['answers'] = valid_answers
-            results.append(entry)
+            entry.update(status='FILLED_UNVERIFIED_SCORE', answers=valid_answers)
+            results[question['id']] = entry
             continue
-
         if valid_answers:
             print(f"\nQuestion {question['number']}: Found existing desktop answers ({len(valid_answers)}/{len(placeholders)}: {valid_answers})", flush=True)
             print(f"Question {question['number']}: [Press ENTER within 4s to KEEP these and skip, or wait to investigate...]", flush=True)
             if check_user_skip(timeout=4):
                 print(f"Question {question['number']}: Keeping existing desktop answers and skipping investigation!\n", flush=True)
-                entry['status'] = 'FILLED_UNVERIFIED_SCORE'
-                entry['answers'] = valid_answers
-                results.append(entry)
+                entry.update(status='FILLED_UNVERIFIED_SCORE', answers=valid_answers)
+                results[question['id']] = entry
                 continue
-        else:
-            print(f"\nQuestion {question['number']}: [Press ENTER within 2s to skip this question...]", flush=True)
-            if check_user_skip(timeout=2):
-                print(f"Question {question['number']}: Skipped by user!\n", flush=True)
-                entry['status'] = 'SKIPPED_BY_USER'
-                results.append(entry)
-                continue
+        pending.append((question, entry))
 
-        print(f"Forensics: Investigating Question {question['number']} (Press ENTER anytime to skip)...", flush=True)
+    try:
+        source = Path(os.environ.get('README_FILE') or engine / 'data/auto-source.html')
+        html = source.read_text(encoding='utf-8') if source.exists() else ''
+        if len(html.encode()) > 250000:
+            raise ValueError('README exceeds supported input size; refusing to truncate')
+    except (OSError, ValueError) as error:
+        html = ''
+        print(f'Forensics: README unavailable for context ({error})', flush=True)
+
+    def solve(item):
+        question, entry = item
+        number = question['number']
         try:
-            source = Path(os.environ.get('README_FILE') or engine / 'data/auto-source.html')
-            html = source.read_text(encoding='utf-8') if source.exists() else ''
-            if len(html.encode()) > 250000:
-                raise ValueError('README exceeds supported input size; refusing to truncate')
-            result = investigate(question, EvidenceTools(engine), directory, readme_html=html, progress=lambda text: print(f'Question {question["number"]}: {text}', flush=True))
-
+            result = investigate(question, EvidenceTools(engine), directory, readme_html=html,
+                                 progress=lambda text: print(f'Question {number}: {text}', flush=True))
             from peer_review import review
             evidence_file = directory / (question['id'] + '-evidence.json')
-            payload = {'kind': 'forensic_answer', 'readme_html_full': html, 'question': question, 'worker_answer': result, 'evidence': json.loads(evidence_file.read_text()), 'image_notes': os.environ.get('FORENSICS_IMAGE_NOTES', '')}
+            payload = {'kind': 'forensic_answer', 'readme_html_full': html, 'question': question, 'worker_answer': result,
+                       'evidence': json.loads(evidence_file.read_text()), 'image_notes': os.environ.get('FORENSICS_IMAGE_NOTES', '')}
             verdict = review(payload, lambda messages, model: call_ai(messages, model=model), os.environ.get('OPENROUTER_MODEL', ''), os.environ.get('REVIEWER_MODEL', ''))
             (directory / (question['id'] + '-review.json')).write_text(json.dumps(verdict, indent=2))
-
             entry['answer'] = result
             if os.environ.get('FORENSICS_APPLY_ANSWERS', '1') == '1' and result.get('answers'):
                 apply_answers(question, result['answers'], directory / 'backups')
                 entry['status'] = 'FILLED_UNVERIFIED_SCORE'
-                print(f"Question {question['number']}: Solved -> {result['answers']}", flush=True)
+                print(f"Question {number}: Solved -> {result['answers']}", flush=True)
             else:
                 entry['status'] = 'DRAFT_REVIEW'
         except UserSkip:
-            print(f"Question {question['number']}: Skipped by user!", flush=True)
+            print(f'Question {number}: Skipped by user!', flush=True)
             entry['status'] = 'SKIPPED_BY_USER'
         except (ValueError, OSError, KeyError, TypeError, IndexError) as error:
             entry.update(status='MANUAL_REVIEW', reason=str(error))
             entry.update(investigation_leads(question, directory))
-            print(f"Question {question['number']}: Requires manual inspection ({error})", flush=True)
-        results.append(entry)
-        for lead in entry.get('leads', [])[:3]:
-            print('  Evidence lead: ' + lead['path'], flush=True)
+            print(f'Question {number}: Requires manual inspection ({error})', flush=True)
+        return entry
+
+    if pending:
+        workers = max(1, min(int(os.environ.get('FORENSICS_PARALLEL', '5')), len(pending)))
+        print(f'Forensics: investigating {len(pending)} question(s) in parallel (Press ENTER anytime to skip them all)...', flush=True)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for entry in pool.map(solve, pending):
+                results[entry['id']] = entry
+                for lead in entry.get('leads', [])[:3]:
+                    print('  Evidence lead: ' + lead['path'], flush=True)
+    results = [results[q['id']] for q in questions]
 
     (directory / 'results.json').write_text(json.dumps(results, indent=2), encoding='utf-8')
     summary = []

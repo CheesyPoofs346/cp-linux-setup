@@ -20,6 +20,8 @@ spec.loader.exec_module(agent)
 
 class ForensicsTests(unittest.TestCase):
     def setUp(self):
+        agent._skip_all.clear()
+        self.addCleanup(agent._skip_all.clear)
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name).resolve()
         self.desktop = self.root / 'Desktop'
@@ -144,6 +146,23 @@ class ForensicsTests(unittest.TestCase):
         result = {'answers': ['203.0.113.9'], 'needs_manual_review': False,
                   'evidence': [{'tool_id': 'e0', 'quote': 'http://203.0.113.9/a.xlsm  ->  file:///home/u/Downloads/a.xlsm' + chr(10) + 'firefox recent URL: "x"'}]}
         self.assertEqual(agent.supported_answers(result, {}, recon=recon), ['203.0.113.9'])
+
+    def test_fast_path_answers_unique_download_ip_without_model(self):
+        q = {'content': 'What is the IP address of the site we were compromised through? EXAMPLE: 13.33.33.37'}
+        recon = {'download_history_and_ips': 'a.jpg user.xdg.origin.url = http://203.0.113.9/a.jpg' + chr(10) + 'firefox recent URL: http://example.com/'}
+        result = agent.fast_path(q, recon)
+        self.assertEqual(result['answers'], ['203.0.113.9'])
+        self.assertEqual(agent.supported_answers(dict(result), {}, recon=recon), ['203.0.113.9'])
+        recon['download_history_and_ips'] += chr(10) + 'firefox download: http://198.51.100.7/b.exe -> file:///tmp/b'
+        self.assertIsNone(agent.fast_path(q, recon))
+        self.assertIsNone(agent.fast_path({'content': 'Which user was added?'}, recon))
+
+    def test_shrink_history_trims_old_tool_output_only(self):
+        msgs = [{'role': 'system', 'content': 's'}, {'role': 'user', 'content': 'u'},
+                {'role': 'user', 'content': json.dumps({'evidence_results': [{'id': 'e1', 'output': 'x' * 5000}]})}]
+        agent.shrink_history(msgs, keep=100)
+        self.assertLess(len(msgs[2]['content']), 400)
+        self.assertEqual(msgs[1]['content'], 'u')
 
     def test_model_confidence_without_evidence_rejected(self):
         with self.assertRaises(ValueError): agent.supported_answers({'answers': ['guess'], 'needs_manual_review': False}, {})
