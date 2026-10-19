@@ -130,35 +130,38 @@ parse_readme() {
     echo "$plain_text" > "$SCRIPT_DIR/../data/readme_plaintext.txt"
     log_debug "Saved plain text to: $SCRIPT_DIR/../data/readme_plaintext.txt"
 
-    # Deterministic extraction first; AI only fills free-text gaps (or parses when no sections exist).
-    local json_data="" ai_response="" det_file hints ai_json
+    # AI extracts the README; the deterministic parser cross-checks users and is the fallback.
+    local json_data="" ai_response="" ai_json="" det_file have_det=0
     det_file=$(mktemp)
-    if python3 "$SCRIPT_DIR/../lib/readme_extract.py" "$readme_path" "$det_file"; then
-        json_data=$(cat "$det_file")
-        hints=$(jq -r '.unparsed_hints | join(" ")' "$det_file")
-        if [[ -n "$hints" ]]; then
-            if [[ -n "${OPENROUTER_API_KEY:-}" ]]                 && ai_response=$(invoke_readme_extraction "$plain_text" "$readme_path")                 && ai_json=$(extract_json_from_response "$ai_response"); then
-                log_info "README free text mentions ($hints); AI fills only those fields"
-                json_data=$(jq --argjson ai "$ai_json" --arg h "$hints"                     'reduce ($h | split(" ")[]) as $f (.; .[$f] = (((.[$f] // []) + ($ai[$f] // [])) | unique_by(tojson)))' <<<"$json_data")                     || log_warn "Could not merge AI gap fill; using deterministic parse only"
-            else
-                log_warn "README mentions ($hints) but AI gap fill unavailable; review those items by hand"
-            fi
+    python3 "$SCRIPT_DIR/../lib/readme_extract.py" "$readme_path" "$det_file" >/dev/null 2>&1 && have_det=1
+    if [[ -n "${OPENROUTER_API_KEY:-}" ]] && ai_response=$(invoke_readme_extraction "$plain_text" "$readme_path"); then
+        echo "$ai_response" > "$SCRIPT_DIR/../data/readme_ai_response.txt"
+        if ai_json=$(extract_json_from_response "$ai_response") && jq -e '.all_users' <<<"$ai_json" >/dev/null 2>&1; then
+            json_data="$ai_json"
+        else
+            log_warn "AI response was not usable JSON"
         fi
     else
-        log_info "No standard user sections found; extracting with AI..."
-        if ! ai_response=$(invoke_readme_extraction "$plain_text" "$readme_path"); then
-            rm -f -- "$det_file"
-            log_error "Failed to extract README information"
-            return 1
-        fi
-        echo "$ai_response" > "$SCRIPT_DIR/../data/readme_ai_response.txt"
-        if ! json_data=$(extract_json_from_response "$ai_response"); then
-            rm -f -- "$det_file"
-            log_error "Failed to extract JSON from AI response"
-            return 1
+        log_warn "AI README extraction unavailable"
+    fi
+    if (( have_det )); then
+        if [[ -z "$json_data" ]]; then
+            log_warn "Using deterministic README parse"
+            json_data=$(jq 'del(.passwords, .unparsed_hints)' "$det_file")
+        elif ! jq -e --slurpfile d "$det_file" \
+                '([.all_users[].name | ascii_downcase] | sort) == ([$d[0].all_users[].name] | sort)' <<<"$json_data" >/dev/null; then
+            log_warn "AI user list disagrees with README sections; using deterministic users/roles/services"
+            json_data=$(jq --slurpfile d "$det_file" \
+                '. as $ai | $d[0] | del(.passwords, .unparsed_hints)
+                 | .recent_hires = ($ai.recent_hires // []) | .terminated_users = ($ai.terminated_users // [])
+                 | .groups_to_create = ($ai.groups_to_create // []) | .system_users_to_restrict = ($ai.system_users_to_restrict // [])' <<<"$json_data")
         fi
     fi
     rm -f -- "$det_file"
+    if [[ -z "$json_data" ]]; then
+        log_error "Failed to extract README information"
+        return 1
+    fi
 
     # Validate JSON structure
     if ! echo "$json_data" | jq -e '.all_users' >/dev/null 2>&1; then
