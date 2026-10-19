@@ -337,5 +337,15 @@ class ForensicsTests(unittest.TestCase):
             # Verify clean answer without angle brackets written directly into file
             self.assertEqual(self.question.read_bytes(), b'Identify the file.\r\nANSWER: culprit.exe\r\n')
 
+    def test_eof_stdin_is_not_a_skip_but_enter_is(self):
+        for payload, expected in ((b"", False), (bytes([10]), True)):
+            r, w = os.pipe()
+            os.write(w, payload)
+            os.close(w)
+            with os.fdopen(r) as stream:
+                with patch.object(agent, '_tty_stream', None), patch.object(sys, 'stdin', stream), \
+                        patch.dict(os.environ, {'SKIP_FORENSICS': ''}):
+                    self.assertEqual(agent.check_user_skip(0), expected)
+
 
 if __name__ == '__main__': unittest.main()

@@ -39,6 +39,10 @@ if os.name == 'posix':
         pass
 
 
+class UserSkip(Exception):
+    """Operator pressed Enter to skip the current question; never an answer."""
+
+
 def check_user_skip(timeout=0):
     """Returns True if the user pressed Enter on the terminal to skip."""
     if os.environ.get('SKIP_FORENSICS') == '1':
@@ -52,8 +56,8 @@ def check_user_skip(timeout=0):
     for stream in streams:
         try:
             rlist, _, _ = select.select([stream], [], [], timeout)
-            if rlist:
-                stream.readline()
+            if rlist and stream.readline():
+                # readline() == '' is EOF (closed/devnull stdin), not a keypress.
                 return True
         except Exception:
             pass
@@ -757,16 +761,12 @@ def investigate(question, tools, directory, caller=None, readme_html='', progres
 
     for round_number in range(1, rounds + 1):
         if check_user_skip(0):
-            print(f"\n[SKIP] User pressed Enter: Skipping Question {question['number']} immediately!\n", flush=True)
-            saved_answers = [clean_answer_value(a) for a in answer_lines if a and not is_unanswered_placeholder(a)]
-            return {'answers': saved_answers if saved_answers else ['SKIPPED'], 'explanation': 'Skipped by user'}
+            raise UserSkip()
         if progress:
             progress(f'turn {round_number}/{rounds}: investigating... (Press ENTER to skip to next)')
         result = caller(messages)
         if check_user_skip(0):
-            print(f"\n[SKIP] User pressed Enter: Skipping Question {question['number']} immediately!\n", flush=True)
-            saved_answers = [clean_answer_value(a) for a in answer_lines if a and not is_unanswered_placeholder(a)]
-            return {'answers': saved_answers if saved_answers else ['SKIPPED'], 'explanation': 'Skipped by user'}
+            raise UserSkip()
         (directory / f'{question["id"]}-round{round_number}.json').write_text(json.dumps(result, indent=2), encoding='utf-8')
         if result.get('command_requests'):
             raise ValueError('AI requested unsupported shell commands')
@@ -944,6 +944,9 @@ def main():
                 print(f"Question {question['number']}: Solved -> {result['answers']}", flush=True)
             else:
                 entry['status'] = 'DRAFT_REVIEW'
+        except UserSkip:
+            print(f"Question {question['number']}: Skipped by user!", flush=True)
+            entry['status'] = 'SKIPPED_BY_USER'
         except (ValueError, OSError, KeyError, TypeError, IndexError) as error:
             entry.update(status='MANUAL_REVIEW', reason=str(error))
             entry.update(investigation_leads(question, directory))
