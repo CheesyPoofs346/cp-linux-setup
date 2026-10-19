@@ -119,7 +119,7 @@ trap 'rm -f -- "$config_tmp" "$run_tmp"' EXIT
     printf 'FORENSICS_DIR=%q\n' "$questions"
     printf 'FORENSICS_IMAGE_NOTES=%q\n' "${FORENSICS_IMAGE_NOTES:-}"
     printf 'FORENSICS_APPLY_ANSWERS=%q\n' "${FORENSICS_APPLY_ANSWERS:-1}"
-    printf 'FORENSICS_MAX_ROUNDS=%q\n' "${FORENSICS_MAX_ROUNDS:-12}"
+    printf 'FORENSICS_MAX_ROUNDS=8\n'
     printf 'AI_TIMEOUT_SECONDS=%q\n' "${AI_TIMEOUT_SECONDS:-180}"
     printf 'AUTO_MODULE_TIMEOUT=%q\n' "${AUTO_MODULE_TIMEOUT:-1800}"
     printf 'AUTO_UPDATE_MODE=%q\n' "${AUTO_UPDATE_MODE:-1}"

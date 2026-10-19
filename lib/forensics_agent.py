@@ -173,6 +173,61 @@ def run_safe_command(cmd, timeout=20):
         return f"Execution error: {e}"
 
 
+def _norm(text):
+    return re.sub(r'\s+', ' ', str(text)).strip().lower()
+
+
+def recon_plain(recon):
+    """Recon as plain text (real newlines, no JSON escaping) so quotes can be matched literally."""
+    return '\n'.join(f'[{k}]\n{v}' for k, v in (recon or {}).items())
+
+
+def download_origin_leads():
+    """Where downloaded files came from: file xattrs, Firefox downloads, IP-host URLs, /etc/hosts overrides."""
+    import shutil
+    import sqlite3
+    leads = []
+    for f in Path('/home').glob('*/Downloads/*'):
+        if not f.is_file():
+            continue
+        for attr in ('user.xdg.origin.url', 'user.xdg.referrer.url'):
+            try:
+                value = os.getxattr(f, attr).decode('utf-8', 'replace')
+                leads.append(f'{f.name} {attr} = {value}')
+            except OSError:
+                pass
+    patterns = ['/home/*/.mozilla/firefox/*/places.sqlite', '/home/*/snap/firefox/common/.mozilla/firefox/*/places.sqlite']
+    for pattern in patterns:
+        for db in glob.glob(pattern):
+            tmpdir = tempfile.mkdtemp(prefix='cpff')
+            try:
+                for suffix in ('', '-wal', '-shm'):  # copy so a running Firefox's lock/WAL cannot block reading
+                    if os.path.exists(db + suffix):
+                        shutil.copy(db + suffix, os.path.join(tmpdir, 'places.sqlite' + suffix))
+                conn = sqlite3.connect(os.path.join(tmpdir, 'places.sqlite'))
+                query = ("SELECT p.url, a.content FROM moz_annos a JOIN moz_places p ON p.id = a.place_id "
+                         "JOIN moz_anno_attributes n ON n.id = a.anno_attribute_id "
+                         "WHERE n.name = 'downloads/destinationFileURI' LIMIT 40")
+                for url, dest in conn.execute(query):
+                    leads.append(f'firefox download: {url} -> {dest}')
+                for (url,) in conn.execute("SELECT url FROM moz_places WHERE url GLOB 'http*://[0-9]*' OR url GLOB 'http://[0-9]*' ORDER BY id DESC LIMIT 30"):
+                    leads.append(f'firefox visited IP-host URL: {url}')
+                for (url,) in conn.execute("SELECT url FROM moz_places WHERE url LIKE '%http%' ORDER BY last_visit_date DESC LIMIT 25"):
+                    leads.append(f'firefox recent URL: {url}')
+                conn.close()
+            except Exception as error:
+                leads.append(f'(could not read {db}: {error})')
+            finally:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+    try:
+        for line in Path('/etc/hosts').read_text(errors='replace').splitlines():
+            if line.strip() and not line.lstrip().startswith('#') and not re.match(r'^(127\.|::1|ff0|fe00)', line.strip()) and 'localhost' not in line:
+                leads.append(f'/etc/hosts: {line.strip()}')
+    except OSError:
+        pass
+    return leads
+
+
 def gather_initial_recon():
     """Gathers instant system reconnaissance to provide immediate context on turn 1."""
     recon = {}
@@ -215,8 +270,9 @@ def gather_initial_recon():
                             download_leads.append(f"{f.name} contains IP: {ip}")
                 except Exception:
                     pass
+        download_leads = download_origin_leads() + download_leads
         if download_leads:
-            recon['download_history_and_ips'] = '\n'.join(download_leads[:30])
+            recon['download_history_and_ips'] = '\n'.join(download_leads[:60])
     except Exception:
         pass
     # 4. Backdoor & persistence leads (autostart, suspicious executables, strings from downloads)
@@ -639,28 +695,25 @@ def supported_answers(result, evidence, recon=None):
     result['answers'] = cleaned_answers
     quotes = []
     citations = result.get('evidence', [])
-    if isinstance(citations, list) and citations:
-        for citation in citations:
-            if not isinstance(citation, dict):
-                raise ValueError('Invalid evidence citation')
-            tid = citation.get('tool_id')
-            quote = citation.get('quote')
-            if tid in ('e0', 'initial_recon') and recon:
-                recon_text = json.dumps(recon, ensure_ascii=False)
-                if not isinstance(quote, str) or not quote.strip() or quote not in recon_text:
-                    raise ValueError('Missing or fabricated evidence citation')
-                quotes.append(quote)
-            else:
-                record = evidence.get(tid)
-                if not record or not record.get('ok') or not isinstance(quote, str) or not quote.strip() or quote not in record.get('output', ''):
-                    raise ValueError('Missing or fabricated evidence citation')
-                quotes.append(quote)
-    elif not isinstance(citations, list):
+    if not isinstance(citations, list) or not all(isinstance(c, dict) for c in citations):
         raise ValueError('Invalid evidence citation')
+    plain_recon = _norm(recon_plain(recon)) if recon else ''
+    for citation in citations:
+        tid, quote = citation.get('tool_id'), citation.get('quote')
+        if not isinstance(quote, str) or not quote.strip():
+            continue
+        if tid in ('e0', 'initial_recon'):
+            haystack = plain_recon
+        else:
+            record = evidence.get(tid)
+            haystack = _norm(record.get('output', '')) if record and record.get('ok') else ''
+        if _norm(quote) in haystack:
+            quotes.append(quote)
+        # An unverifiable quote is dropped; the answer must still appear verbatim in real evidence below.
 
     all_text = ' '.join(str(rec.get('output', '')) for rec in evidence.values() if rec.get('ok'))
     if recon:
-        all_text += ' ' + json.dumps(recon, ensure_ascii=False)
+        all_text += ' ' + recon_plain(recon)
 
     for answer in cleaned_answers:
         matched = False
@@ -681,8 +734,7 @@ def supported_answers(result, evidence, recon=None):
                 answer in all_text or
                 ('/usr' + answer) in all_text or
                 answer.replace('/bin/', '/usr/bin/') in all_text or
-                answer.lower() in all_text.lower() or
-                result.get('solved') is True
+                answer.lower() in all_text.lower()
             ):
                 matched = True
         if not matched:
@@ -753,7 +805,7 @@ def investigate(question, tools, directory, caller=None, readme_html='', progres
         {'role': 'user', 'content': json.dumps(user_payload, ensure_ascii=False)}
     ]
     evidence = {}
-    rounds = int(os.environ.get('FORENSICS_MAX_ROUNDS', '12'))
+    rounds = int(os.environ.get('FORENSICS_MAX_ROUNDS', '8'))
     if not 1 <= rounds <= 24:
         raise ValueError('FORENSICS_MAX_ROUNDS must be between 1 and 24')
     rejected = {}

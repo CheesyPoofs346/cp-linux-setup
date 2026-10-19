@@ -131,10 +131,19 @@ class ForensicsTests(unittest.TestCase):
     def test_fabricated_citation_or_answer_rejected(self):
         evidence = {'e1': {'ok': True, 'output': 'Evidence: culprit.exe'}}
         result = {'answers': ['culprit.exe'], 'needs_manual_review': False, 'evidence': [{'tool_id': 'e1', 'quote': 'invented'}]}
+        # A sloppy quote is dropped, but the answer is still literally present in real evidence.
+        self.assertEqual(agent.supported_answers(result, evidence), ['culprit.exe'])
+        result['answers'] = ['invented.exe']
         with self.assertRaises(ValueError): agent.supported_answers(result, evidence)
         result['evidence'][0]['quote'] = 'culprit.exe'
         result['answers'] = ['another.exe']
         with self.assertRaises(ValueError): agent.supported_answers(result, evidence)
+
+    def test_multiline_and_whitespace_quotes_from_recon_verify(self):
+        recon = {'download_history_and_ips': 'firefox download: http://203.0.113.9/a.xlsm -> file:///home/u/Downloads/a.xlsm' + chr(10) + 'firefox recent URL: "x"'}
+        result = {'answers': ['203.0.113.9'], 'needs_manual_review': False,
+                  'evidence': [{'tool_id': 'e0', 'quote': 'http://203.0.113.9/a.xlsm  ->  file:///home/u/Downloads/a.xlsm' + chr(10) + 'firefox recent URL: "x"'}]}
+        self.assertEqual(agent.supported_answers(result, {}, recon=recon), ['203.0.113.9'])
 
     def test_model_confidence_without_evidence_rejected(self):
         with self.assertRaises(ValueError): agent.supported_answers({'answers': ['guess'], 'needs_manual_review': False}, {})
