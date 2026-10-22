@@ -321,8 +321,16 @@ def apply(ctx, finding):
     kind = act[0]
     try:
         if kind == 'purge':
-            r = run(['apt-get', 'purge', '-y', act[1]])
-            return r.returncode == 0, f'purged {act[1]}'
+            r = run(['apt-get', '-o', 'DPkg::Lock::Timeout=300', 'purge', '-y', act[1]],
+                    env=dict(os.environ, DEBIAN_FRONTEND='noninteractive'), stdin=subprocess.DEVNULL, timeout=600)
+            if r.returncode != 0 and 'dpkg --configure -a' in (r.stderr or '') + (r.stdout or ''):
+                run(['dpkg', '--configure', '-a'], env=dict(os.environ, DEBIAN_FRONTEND='noninteractive'), stdin=subprocess.DEVNULL, timeout=600)
+                r = run(['apt-get', '-o', 'DPkg::Lock::Timeout=300', 'purge', '-y', act[1]],
+                        env=dict(os.environ, DEBIAN_FRONTEND='noninteractive'), stdin=subprocess.DEVNULL, timeout=600)
+            if r.returncode == 0:
+                return True, f'purged {act[1]}'
+            tail = ((r.stderr or r.stdout).strip().splitlines() or ['no output'])[-1][:120]
+            return False, f'apt could not purge {act[1]}: {tail}'
         if kind == 'chmod':
             r = run(['chmod', act[2], str(ctx.p(act[1]))])
             return r.returncode == 0, f'chmod {act[2]} {act[1]}'
@@ -535,7 +543,8 @@ def notify(ctx, message):
         if user and ctx.root == Path('/'):
             uid = subprocess.run(['id', '-u', user], capture_output=True, text=True).stdout.strip()
             env = dict(os.environ, DISPLAY=':0', DBUS_SESSION_BUS_ADDRESS=f'unix:path=/run/user/{uid}/bus')
-            subprocess.run(['sudo', '-u', user, 'notify-send', '-u', 'critical', 'Sentinel: check these', message[:200]], env=env, capture_output=True, timeout=5)
+            # runuser, not sudo: sudo runs the invoker's PAM account check and stalls on an expired root password
+            subprocess.run(['runuser', '-u', user, '--', 'env', f'DISPLAY=:0', f'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus', 'notify-send', '-u', 'critical', 'Sentinel: check these', message[:200]], env=env, capture_output=True, timeout=5)
     except (OSError, subprocess.SubprocessError):
         pass
 
@@ -571,12 +580,29 @@ def run_fix(ctx, selection, dismiss=False, log=print):
     return len(picks)
 
 
+MAX_RETRIES = 3
+
+
+def _failures(state, key):
+    value = str(state.get(key, ''))
+    return int(value.split(':')[1]) if value.startswith('failed:') else (MAX_RETRIES if value == 'failed' else 0)
+
+
+def redate_accounts(ctx):
+    """Keep root and the operator from ever hitting 'password expired' (sudo/su would stall on a prompt)."""
+    if ctx.root != Path('/'):
+        return
+    for user in sorted(ctx.protected):
+        subprocess.run(['chage', '-d', time.strftime('%Y-%m-%d'), '-E', '-1', '-I', '-1', user], capture_output=True)
+
+
 def one_pass(ctx, state, auto_only=False, ask_mode=False, log=print):
+    redate_accounts(ctx)
     findings = scan(ctx)
-    new_auto = [f for f in findings if f.mode == 'auto' and state.get(f.key) != 'done']
+    new_auto = [f for f in findings if f.mode == 'auto' and state.get(f.key) != 'done' and _failures(state, f.key) < MAX_RETRIES]
     for f in new_auto:
         ok, msg = apply(ctx, f)
-        state[f.key] = 'done' if ok else 'failed'
+        state[f.key] = 'done' if ok else f'failed:{_failures(state, f.key) + 1}'
         log(f"  [auto] {'fixed' if ok else 'FAILED'}: {f.text} -> {msg}")
         if ok:
             record_fix(ctx, f'{f.category}: {f.text}')

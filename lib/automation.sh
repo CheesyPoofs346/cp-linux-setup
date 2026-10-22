@@ -245,8 +245,8 @@ run_auto() {
 # Password-aging policy must never leave the operator's own account expired (sudo would demand a reset).
 repair_operator_aging() {
     local u
-    for u in "${SUDO_USER:-}" "${PROTECTED_USER:-}"; do
-        [[ -n "$u" && "$u" != root ]] && id "$u" >/dev/null 2>&1 && chage -d "$(date +%F)" -E -1 -I -1 "$u" 2>/dev/null || true
+    for u in root "${SUDO_USER:-}" "${PROTECTED_USER:-}"; do
+        [[ -n "$u" ]] && id "$u" >/dev/null 2>&1 && chage -d "$(date +%F)" -E -1 -I -1 "$u" 2>/dev/null || true
     done
 }
 

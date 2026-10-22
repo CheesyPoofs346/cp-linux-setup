@@ -922,7 +922,7 @@ enforce_password_policies() {
         chage -E -1 "$username" 2>/dev/null
 
         # Never leave the operator's own account expired by the new max age (sudo would demand a reset).
-        if [[ "$username" == "$(get_main_user)" || "$username" == "${PROTECTED_USER:-}" || "$username" == "${SUDO_USER:-}" ]]; then
+        if [[ "$username" == root || "$username" == "$(get_main_user)" || "$username" == "${PROTECTED_USER:-}" || "$username" == "${SUDO_USER:-}" ]]; then
             chage -d "$(date +%F)" -E -1 -I -1 "$username" 2>/dev/null || true
         fi
 

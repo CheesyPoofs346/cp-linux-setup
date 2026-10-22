@@ -160,6 +160,16 @@ class SentinelTests(unittest.TestCase):
         self.assertIn('## Fixed automatically', report)
         self.assertIn('firefox:', report)
 
+    def test_failed_purge_reports_apt_error_and_stops_after_three_tries(self):
+        class R:
+            returncode, stdout, stderr = 100, '', 'E: Could not get lock /var/lib/dpkg/lock'
+        state, lines = {}, []
+        with patch.object(sentinel, 'run', return_value=R()) as apt, patch.object(sentinel, 'notify'):
+            for _ in range(5):
+                sentinel.one_pass(self.ctx, state, log=lines.append)
+        self.assertTrue(any('Could not get lock' in l for l in lines))
+        self.assertEqual(sum(1 for c in apt.call_args_list if 'nmap' in c[0][0]), 3)  # gives up after 3 failures
+
     def test_ask_mode_still_available(self):
         state = {}
         with patch.object(sentinel, 'ask', return_value='\n') as prompt, patch.object(sentinel, 'apply', return_value=(True, 'ok')):
