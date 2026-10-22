@@ -3,6 +3,7 @@ from pathlib import Path
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'lib'))
+import score_tracker
 from score_tracker import parse_scoring_report
 
 
@@ -60,6 +61,27 @@ class ScoreTrackerTests(unittest.TestCase):
         info = parse_scoring_report(html)
         self.assertIsNone(info['score'])
         self.assertIsNone(info['max_score'])
+
+
+class ProtectedAccountTests(unittest.TestCase):
+    def test_operator_password_and_aging_never_touched(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = Path(tmp)
+            (engine / 'data').mkdir()
+            (engine / 'data/auto-source.html').write_text('<p>Admins:</p><p>rooyay:Pa$$w0rd10 (YOU)</p><p>other:weakpw1</p>', encoding='utf-8')
+            commands = []
+            with patch.object(score_tracker, 'run_command', lambda cmd, timeout=10: commands.append(cmd) or (0, '')), \
+                    patch.dict('os.environ', {'SUDO_USER': 'rooyay'}):
+                score_tracker.apply_targeted_hardening(engine)
+            self.assertIn('rooyay', score_tracker.PROTECTED)
+            joined = '\n'.join(commands)
+            self.assertNotIn("echo 'rooyay:", joined)
+            self.assertNotIn('passwd -e rooyay', joined)
+            self.assertIn("echo 'other:", joined)  # non-protected weak password is still fixed
+            self.assertIn('-d $(date +%F) -E -1', joined)  # aging loop re-dates protected accounts
 
 
 if __name__ == '__main__':

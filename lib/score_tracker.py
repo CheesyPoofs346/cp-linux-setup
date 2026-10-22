@@ -134,9 +134,25 @@ def run_command(cmd, timeout=10):
         return 1, str(e)
 
 
+PROTECTED = {'root'}
+
+
+def load_protected(engine_dir):
+    names = {'root', os.environ.get('SUDO_USER', '').lower(), os.environ.get('PROTECTED_USER', '').lower()}
+    try:
+        text = (engine_dir / 'data/auto-source.html').read_text(encoding='utf-8', errors='ignore')
+        names.update(m.lower() for m in re.findall(r'([a-zA-Z_][a-zA-Z0-9_.-]*)\s*:\s*\S+\s*\(\s*you\s*\)', text, re.I))
+    except OSError:
+        pass
+    PROTECTED.clear()
+    PROTECTED.update(n for n in names if n)
+
+
 def apply_targeted_hardening(engine_dir):
     """Executes high-impact CyberPatriot hardening fixes that frequently yield remaining points."""
     print("Score Optimizer: Applying targeted hardening passes...", flush=True)
+    load_protected(engine_dir)
+    protected_args = ' '.join(sorted(PROTECTED))
 
     # 1. Firewall (UFW)
     run_command("ufw --force enable 2>/dev/null; ufw default deny incoming 2>/dev/null; ufw default allow outgoing 2>/dev/null")
@@ -183,7 +199,7 @@ def apply_targeted_hardening(engine_dir):
             pass
 
     # Apply chage to all non-system accounts
-    run_command("awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' /etc/passwd | while read u; do chage -M 90 -m 7 -W 14 \"$u\" 2>/dev/null || true; done")
+    run_command("awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' /etc/passwd | while read u; do case \" " + protected_args + " \" in *\" $u \"*) chage -M 90 -m 7 -W 14 -d $(date +%F) -E -1 \"$u\" 2>/dev/null || true;; *) chage -M 90 -m 7 -W 14 \"$u\" 2>/dev/null || true;; esac; done")
 
     # 4. Dynamic User & Password Auditing (from README and system state)
     default_strong_pass = "Cyb3rP@triot2026!#"
@@ -193,14 +209,14 @@ def apply_targeted_hardening(engine_dir):
     # Check for users specifically required to change password at login
     for match in re.finditer(r'([a-zA-Z0-9_.-]+)[^.\n]*must change password|password change required for ([a-zA-Z0-9_.-]+)', readme_text, re.I):
         u = (match.group(1) or match.group(2)).lower()
-        if u and u not in ('root', 'benjamin'):
+        if u and u not in PROTECTED:
             run_command(f"if id {u} &>/dev/null; then passwd -e {u} 2>/dev/null || chage -d 0 {u} 2>/dev/null || true; fi")
 
     # Check for weak passwords listed in README (user: password or user (password: ...))
     for match in re.finditer(r'([a-zA-Z0-9_.-]+)\s*[:\(]\s*(?:password:\s*)?([^\s<()]+)', readme_text, re.I):
         u = match.group(1).lower()
         p = match.group(2)
-        if u and p and u not in ('root', 'benjamin'):
+        if u and p and u not in PROTECTED:
             is_weak = (len(p) < 12 or
                        not re.search(r'[A-Z]', p) or
                        not re.search(r'[a-z]', p) or
@@ -217,7 +233,7 @@ def apply_targeted_hardening(engine_dir):
             for u in pdata.get('all_users', []):
                 uname = u.get('name', '').lower()
                 role = u.get('account_type', 'standard')
-                if uname and uname not in ('root', 'benjamin'):
+                if uname and uname not in PROTECTED:
                     run_command(f"if ! id {uname} &>/dev/null; then useradd -m -s /bin/bash {uname} 2>/dev/null; echo '{uname}:{default_strong_pass}' | chpasswd 2>/dev/null; fi")
                     if role == 'admin':
                         run_command(f"usermod -aG sudo {uname} 2>/dev/null || true")
@@ -226,17 +242,17 @@ def apply_targeted_hardening(engine_dir):
                         run_command(f"deluser {uname} admin 2>/dev/null || gpasswd -d {uname} admin 2>/dev/null || true")
             for rh in pdata.get('recent_hires', []):
                 rname = (rh.get('name') if isinstance(rh, dict) else str(rh)).lower()
-                if rname and rname not in ('root', 'benjamin'):
+                if rname and rname not in PROTECTED:
                     run_command(f"if ! id {rname} &>/dev/null; then useradd -m -s /bin/bash {rname} 2>/dev/null; echo '{rname}:{default_strong_pass}' | chpasswd 2>/dev/null; fi")
             for tu in pdata.get('terminated_users', []):
                 tname = tu.lower() if isinstance(tu, str) else ''
-                if tname and tname not in ('root', 'benjamin'):
+                if tname and tname not in PROTECTED:
                     run_command(f"if id {tname} &>/dev/null; then userdel -r {tname} 2>/dev/null || passwd -l {tname} 2>/dev/null || true; fi")
         except Exception:
             pass
 
     # Ensure all accounts with empty/blank passwords in /etc/shadow are secured
-    run_command("awk -F: '$2 == \"\" || $2 == \"!\" || $2 == \"!!\" {print $1}' /etc/shadow | while read u; do if [ \"$u\" != \"root\" ] && [ \"$u\" != \"benjamin\" ]; then echo \"$u:Cyb3rP@triot2026!#\" | chpasswd 2>/dev/null || true; fi; done")
+    run_command("awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' /etc/passwd | while read u; do case \" " + protected_args + " \" in *\" $u \"*) continue;; esac; [ \"$(passwd -S \"$u\" 2>/dev/null | awk '{print $2}')\" = NP ] && echo \"$u:Cyb3rP@triot2026!#\" | chpasswd 2>/dev/null; done; true")
 
     # 5. Disable Guest Account & Automatic Login
     lightdm_conf = Path('/etc/lightdm/lightdm.conf.d/50-no-guest.conf')
@@ -440,8 +456,17 @@ Output ONLY valid JSON containing a list of safe shell remediation commands to f
         print(f"Score Optimizer: Recommendation step skipped ({e})", flush=True)
 
 
+def repair_protected_aging(engine_dir):
+    """Undo any aging/expiry that would force the main admin to reset a password at sudo/login."""
+    load_protected(engine_dir)
+    for user in sorted(PROTECTED - {'root'}):
+        run_command(f"id {user} &>/dev/null && chage -d $(date +%F) -E -1 -I -1 {user} 2>/dev/null; true")
+
+
 def main():
     engine_dir = Path(__file__).resolve().parents[1]
+    import atexit
+    atexit.register(repair_protected_aging, engine_dir)
     restore_scoring_service()
 
     report_path = find_scoring_report()
