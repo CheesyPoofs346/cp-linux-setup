@@ -29,3 +29,12 @@ README_DATA='{"critical_services":["ssh","xrdp"]}'
 extra_is_critical xrdp
 if extra_is_critical telnet; then echo 'FAIL: non-critical treated as critical'; exit 1; fi
 echo 'PASS: backdoor/apt line neutralization is idempotent and spares benign lines; critical services respected'
+printf 'disable_vrfy_command = no\nmyhostname = x\n' > "$TEST_DIR/main.cf"
+extra_set_kv "$TEST_DIR/main.cf" disable_vrfy_command yes
+extra_set_kv "$TEST_DIR/main.cf" smtpd_helo_required yes
+grep -Fxq 'disable_vrfy_command = yes' "$TEST_DIR/main.cf"
+grep -Fxq 'smtpd_helo_required = yes' "$TEST_DIR/main.cf"
+[[ "$(grep -c disable_vrfy "$TEST_DIR/main.cf")" == 1 ]]
+before=$(md5sum < "$TEST_DIR/main.cf"); extra_set_kv "$TEST_DIR/main.cf" disable_vrfy_command yes
+[[ "$before" == "$(md5sum < "$TEST_DIR/main.cf")" ]]
+echo 'PASS: extra_set_kv replaces, appends, and is idempotent'

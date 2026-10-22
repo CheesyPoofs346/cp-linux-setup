@@ -31,12 +31,18 @@ BAD_PACKAGES = (
     'freeciv aisleriot gnome-mines gnome-sudoku gnome-mahjongg gnome-chess five-or-more four-in-a-row hitori iagno lightsoff '
     'quadrapassel swell-foo tali minetest supertux openarena frozen-bubble ace-of-penguins wesnoth 0ad '
     'telnet rsh-client rsh-redone-client talk transmission-gtk transmission-common transmission-cli deluge qbittorrent vuze frostwire '
-    'zangband nethack-console bsdgames empire').split()
+    'zangband nethack-console bsdgames empire '
+    'logkeys knocker nbtscan fierce dnsrecon recon-ng theharvester sslstrip bettercap reaver pixiewps bully weevely ncrack '
+    'thc-hydra thc-ssl-dos slowhttptest wapiti w3af skipfish john-the-ripper cewl patator ike-scan onesixtyone smbmap enum4linux '
+    'zmap masscan unicornscan arpwatch netdiscover dirb gobuster wpscan sslscan hunt xprobe sipcalc ftp-ssl telnetd inetutils-telnetd '
+    'telnetd-ssl rsh-server rsh-redone-server talkd ntalk nis ypserv ypbind tightvncserver vnc4server '
+    'gnome-games kdegames kpat ksudoku kmines kmahjongg kreversi klines gbrainy xmoto pingus extremetuxracer neverball neverputt '
+    'chromium-bsu flightgear supertuxkart warzone2100 widelands dosbox pidgin-otr').split()
 DUAL_USE_PACKAGES = 'netcat-openbsd tcpdump socat snort openvpn x11vnc remmina nfs-kernel-server'.split()
 SUID_ABUSABLE = set('find vim vim.basic vi nano python python2 python3 perl ruby bash sh dash zsh cp mv less more awk gawk mawk env nmap tar zip '
                     'unzip nc ncat socat php node lua man tee xxd base64 dd cat head tail sed gdb strace ftp wget curl rsync tclsh'.split())
 SUID_DEFAULT_DIRS = ('/usr/bin', '/bin', '/usr/sbin', '/sbin', '/usr/lib', '/usr/libexec', '/usr/local/bin', '/usr/local/sbin', '/opt', '/home', '/tmp', '/var/tmp')
-PROHIBITED_SERVICES = 'telnet.socket telnetd vsftpd proftpd pure-ftpd tftpd-hpa rsh.socket rlogin.socket rexec.socket snmpd nfs-server rpcbind apache2 lighttpd nginx xinetd xrdp x11vnc'.split()
+PROHIBITED_SERVICES = 'telnet.socket telnetd vsftpd proftpd pure-ftpd tftpd-hpa rsh.socket rlogin.socket rexec.socket snmpd nfs-server rpcbind apache2 lighttpd nginx xinetd xrdp x11vnc ypserv ypbind rpc-statd nfs-mountd tightvncserver vncserver'.split()
 SAFE_STOP_SERVICES = 'avahi-daemon cups cups-browsed bluetooth ModemManager whoopsie kerneloops speech-dispatcher colord geoclue apport'.split()
 FIREFOX_PREFS = [
     'user_pref("dom.disable_open_during_load", true);',

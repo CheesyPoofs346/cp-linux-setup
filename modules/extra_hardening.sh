@@ -219,6 +219,93 @@ extra_host_conf() {
     sed -i -E '/^[[:space:]]*(nospoof|spoof|spoofalert)\b/Id' /etc/host.conf && extra_fixed "Removed unsupported nospoof lines from /etc/host.conf"
 }
 
+# Set "key<sep>value" in a config file: replace an existing active line, else append. Backed up, idempotent.
+extra_set_kv() {
+    local file="$1" key="$2" value="$3" sep="${4:- = }"
+    [[ -f "$file" && ! -L "$file" ]] || return 0
+    grep -Fxq -- "${key}${sep}${value}" "$file" && return 0
+    backup_file "$file" >/dev/null 2>&1 || true
+    if grep -Eq "^[[:space:]]*${key}[[:space:]]*(=|[[:space:]])" "$file"; then
+        sed -E -i "s~^[[:space:]]*${key}[[:space:]]*(=|[[:space:]]).*~${key}${sep}${value}~" "$file"
+    else
+        printf '%s%s%s\n' "$key" "$sep" "$value" >> "$file"
+    fi
+    extra_fixed "Set ${key}${sep}${value} in $file"
+}
+
+# Mail/DNS servers only when they exist (README may require them): no banner leaks, no open relay, no open recursion.
+extra_mail_dns() {
+    if [[ -f /etc/postfix/main.cf ]]; then
+        extra_set_kv /etc/postfix/main.cf disable_vrfy_command yes
+        extra_set_kv /etc/postfix/main.cf smtpd_helo_required yes
+        extra_set_kv /etc/postfix/main.cf mynetworks '127.0.0.0/8 [::ffff:127.0.0.0]/104 [::1]/128'
+    fi
+    if [[ -f /etc/dovecot/conf.d/10-auth.conf ]]; then
+        extra_set_kv /etc/dovecot/conf.d/10-auth.conf disable_plaintext_auth yes
+    fi
+    local opts=/etc/bind/named.conf.options
+    if [[ -f "$opts" ]] && ! grep -q 'allow-recursion' "$opts"; then
+        backup_file "$opts" >/dev/null 2>&1 || true
+        sed -i '0,/options[[:space:]]*{/s//options {\n\tallow-recursion { localhost; localnets; };\n\tallow-transfer { none; };\n\tversion "not disclosed";/' "$opts" \
+            && extra_fixed "BIND recursion/transfer restricted in $opts"
+    fi
+    return 0
+}
+
+# Linux Mint / Ubuntu: keep update checks on and stay on the LTS channel.
+extra_update_settings() {
+    local f=/etc/apt/apt.conf.d/20auto-upgrades
+    if [[ -d /etc/apt/apt.conf.d ]] && ! grep -q 'Update-Package-Lists "1"' "$f" 2>/dev/null; then
+        printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\nAPT::Periodic::Download-Upgradeable-Packages "1";\nAPT::Periodic::AutocleanInterval "7";\n' > "$f" \
+            && extra_fixed "Automatic update checks enabled ($f)"
+    fi
+    extra_set_kv /etc/update-manager/release-upgrades Prompt lts '='
+    return 0
+}
+
+# Idle shell timeout and strict default umask for every login shell.
+extra_shell_profile() {
+    local f=/etc/profile.d/cp-hardening.sh
+    [[ -f "$f" ]] && return 0
+    [[ -d /etc/profile.d ]] || return 0
+    printf '# CyberPatriot hardening\nreadonly TMOUT=900 2>/dev/null || true\nexport TMOUT\numask 027\n' > "$f"
+    chmod 644 "$f"
+    extra_fixed "Shell idle timeout + umask 027 ($f)"
+}
+
+# Network/kernel sysctls; one idempotent drop-in.
+extra_sysctl_extra() {
+    local f=/etc/sysctl.d/99-cp-extra.conf
+    [[ -f "$f" ]] && return 0
+    [[ -d /etc/sysctl.d ]] || return 0
+    cat > "$f" <<'SYSCTL'
+net.ipv4.tcp_syncookies = 1
+net.ipv4.tcp_max_syn_backlog = 2048
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv4.conf.default.accept_source_route = 0
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.default.send_redirects = 0
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv4.conf.all.secure_redirects = 0
+net.ipv4.icmp_echo_ignore_broadcasts = 1
+net.ipv4.icmp_ignore_bogus_error_responses = 1
+net.ipv4.conf.all.rp_filter = 1
+net.ipv4.conf.all.log_martians = 1
+net.ipv6.conf.all.accept_redirects = 0
+net.ipv6.conf.default.accept_redirects = 0
+kernel.randomize_va_space = 2
+kernel.sysrq = 0
+fs.suid_dumpable = 0
+fs.protected_hardlinks = 1
+fs.protected_symlinks = 1
+kernel.dmesg_restrict = 1
+kernel.kptr_restrict = 2
+SYSCTL
+    sysctl --system >/dev/null 2>&1 || true
+    extra_fixed "Extra sysctl hardening written ($f)"
+}
+
 run_extra_hardening() {
     log_section "Extra Hardening (deterministic checklist)"
     extra_host_conf
@@ -234,6 +321,10 @@ run_extra_hardening() {
     extra_audit_apparmor
     extra_screen_lock
     extra_firefox_policy
+    extra_mail_dns
+    extra_update_settings
+    extra_shell_profile
+    extra_sysctl_extra
     log_success "Extra hardening complete ($EXTRA_FIXES change(s))"
     return 0
 }
