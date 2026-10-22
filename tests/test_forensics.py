@@ -164,6 +164,28 @@ class ForensicsTests(unittest.TestCase):
         self.assertLess(len(msgs[2]['content']), 400)
         self.assertEqual(msgs[1]['content'], 'u')
 
+    def test_rate_limit_429_is_retried_then_succeeds(self):
+        import urllib.error
+
+        class Body:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self, n=-1): return json.dumps({'choices': [{'message': {'content': '{"tool_requests": []}'}, 'finish_reason': 'stop'}]}).encode()
+
+        calls = []
+
+        def fake_urlopen(request, timeout=0):
+            calls.append(1)
+            if len(calls) < 3:
+                raise urllib.error.HTTPError('u', 429, 'Too Many Requests', {'Retry-After': '1'}, None)
+            return Body()
+
+        env = {'AI_PROVIDER': 'nvidia', 'OPENROUTER_API_KEY': 'k', 'OPENROUTER_MODEL': 'm', 'AI_MIN_INTERVAL': '0'}
+        with patch.dict(os.environ, env), patch.object(agent.urllib.request, 'urlopen', fake_urlopen), \
+                patch.object(agent.time, 'sleep', lambda s: None), patch.object(agent, 'save_ai_diagnostic', lambda *a: 'd'):
+            self.assertEqual(agent.call_ai([{'role': 'user', 'content': 'x'}]), {'tool_requests': []})
+        self.assertEqual(len(calls), 3)
+
     def test_model_confidence_without_evidence_rejected(self):
         with self.assertRaises(ValueError): agent.supported_answers({'answers': ['guess'], 'needs_manual_review': False}, {})
 

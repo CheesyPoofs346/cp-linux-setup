@@ -153,15 +153,24 @@ invoke_readme_extraction() {
         payload=$(printf '%s' "$payload" | jq '. + {chat_template_kwargs: {enable_thinking: false}}')
     fi
     # Make API request
-    local response
-    response=$(curl -sS --connect-timeout 15 --max-time "${AI_TIMEOUT_SECONDS:-180}" -X POST "$OPENROUTER_API_URL" \
-        -H "Authorization: Bearer $OPENROUTER_API_KEY" \
-        -H "Content-Type: application/json" \
-        -H "HTTP-Referer: https://github.com/cyberpatriot-linux-auto" \
-        -d "$payload") || {
+    local response attempt
+    for attempt in 1 2 3 4 5 6; do
+        response=$(curl -sS --connect-timeout 15 --max-time "${AI_TIMEOUT_SECONDS:-180}" -X POST "$OPENROUTER_API_URL" \
+            -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+            -H "Content-Type: application/json" \
+            -H "HTTP-Referer: https://github.com/cyberpatriot-linux-auto" \
+            -d "$payload") || response=""
+        # Back off and retry on network failure, 429 rate limits, or transient 5xx.
+        if [[ -n "$response" ]] && ! grep -qiE '"(code|status)": *(429|50[0-4])|rate.?limit|too many requests' <<<"$response"; then
+            break
+        fi
+        log_warn "AI request throttled or failed (attempt $attempt/6); retrying..."
+        sleep $((attempt * 8))
+    done
+    if [[ -z "$response" ]]; then
         log_error "Failed to call OpenRouter API"
         return 1
-    }
+    fi
 
     # Extract the content from response
     local content=$(echo "$response" | jq -r '.choices[0].message.content' 2>/dev/null)

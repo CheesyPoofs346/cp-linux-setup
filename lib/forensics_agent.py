@@ -11,6 +11,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import random
 import time
 import urllib.error
 import urllib.request
@@ -653,6 +654,43 @@ def save_ai_diagnostic(stage, model, content, key):
     return path
 
 
+_ai_slots = threading.Semaphore(int(os.environ.get('AI_CONCURRENCY', '2')))
+_ai_pace = threading.Lock()
+_ai_last = [0.0]
+RETRYABLE = {408, 425, 429, 500, 502, 503, 504}
+
+
+def _pace():
+    """Spread requests out so parallel questions cannot trip the provider's per-minute limit."""
+    gap = float(os.environ.get('AI_MIN_INTERVAL', '2.0'))
+    with _ai_pace:
+        wait = _ai_last[0] + gap - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        _ai_last[0] = time.monotonic()
+
+
+def _post_with_retry(request, timeout):
+    """urlopen with Retry-After / exponential backoff on 429 and transient 5xx or network errors."""
+    attempts = int(os.environ.get('AI_RETRIES', '7'))
+    for attempt in range(attempts):
+        _pace()
+        try:
+            with _ai_slots:
+                with urllib.request.urlopen(request, timeout=timeout) as response:
+                    return response.read(2_000_000)
+        except urllib.error.HTTPError as error:
+            if error.code not in RETRYABLE or attempt == attempts - 1:
+                raise ValueError(f'Service HTTP {error.code}; check provider access/quota') from None
+            retry_after = error.headers.get('Retry-After', '') if error.headers else ''
+            delay = float(retry_after) if retry_after.replace('.', '', 1).isdigit() else min(45, 4 * 2 ** attempt)
+        except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as error:
+            if attempt == attempts - 1:
+                raise ValueError(f'Provider unreachable or timed out: {error}') from None
+            delay = min(30, 3 * 2 ** attempt)
+        time.sleep(min(60, delay) + random.uniform(0, 1.5))
+
+
 def call_ai(messages, model=None):
     provider = os.environ.get('AI_PROVIDER', 'openrouter')
     endpoint = {'openrouter': 'https://openrouter.ai/api/v1/chat/completions', 'nvidia': 'https://integrate.api.nvidia.com/v1/chat/completions'}.get(provider)
@@ -667,11 +705,7 @@ def call_ai(messages, model=None):
     if provider == 'nvidia' and payload['model'].startswith('nvidia/nemotron-3-'):
         payload['chat_template_kwargs'] = {'enable_thinking': True}
     request = urllib.request.Request(endpoint, data=json.dumps(payload).encode(), headers={'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'})
-    try:
-        with urllib.request.urlopen(request, timeout=int(os.environ.get('AI_TIMEOUT_SECONDS', '180'))) as response:
-            raw = response.read(2_000_000)
-    except urllib.error.HTTPError as error:
-        raise ValueError(f'Service HTTP {error.code}; check provider access/quota') from None
+    raw = _post_with_retry(request, int(os.environ.get('AI_TIMEOUT_SECONDS', '180')))
     try:
         result = json.loads(raw)
     except (json.JSONDecodeError, UnicodeDecodeError):
@@ -1084,7 +1118,7 @@ def main():
         return entry
 
     if pending:
-        workers = max(1, min(int(os.environ.get('FORENSICS_PARALLEL', '5')), len(pending)))
+        workers = max(1, min(int(os.environ.get('FORENSICS_PARALLEL', '3')), len(pending)))
         print(f'Forensics: investigating {len(pending)} question(s) in parallel (Press ENTER anytime to skip them all)...', flush=True)
         with ThreadPoolExecutor(max_workers=workers) as pool:
             for entry in pool.map(solve, pending):
