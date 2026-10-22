@@ -192,6 +192,10 @@ def scan(ctx):
             except (OSError, subprocess.SubprocessError):
                 pass
 
+    # --- auto: unsupported resolver lines that print "bad command" on every command
+    for n, line in comment_lines(ctx, '/etc/host.conf', lambda l: re.match(r'\s*(nospoof|spoof|spoofalert)\b', l, re.I) is not None):
+        add('host-conf', f'/etc/host.conf:{n}: {line} (glibc rejects this line)', ('del-line', '/etc/host.conf', line), 'auto')
+
     # --- auto: Firefox hardening in every profile (user.js is applied at each start)
     for pattern in ('home/*/.mozilla/firefox/*/prefs.js', 'home/*/snap/firefox/common/.mozilla/firefox/*/prefs.js'):
         for prefs in sorted(ctx.root.glob(pattern)):

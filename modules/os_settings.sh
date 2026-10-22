@@ -777,14 +777,10 @@ setup_host_conf() {
 # /etc/host.conf - Resolver configuration
 # CyberPatriot Hardened Configuration
 
-# Order of name resolution: DNS first, then hosts file
-order bind,hosts
-
-# Allow multiple IP addresses per hostname
+# The "order" line is only used by old versions of the C library.
+order hosts,bind
 multi on
-
-# Enable spoof checking (reverse DNS lookups)
-nospoof on
+# (no 'nospoof'/'spoof' lines: current glibc rejects them with "bad command" on every command run)
 EOF
 
     if [[ $? -eq 0 ]]; then

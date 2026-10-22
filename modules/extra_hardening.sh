@@ -211,8 +211,17 @@ JSON
     return 0
 }
 
+# glibc no longer knows 'nospoof'/'spoof'; leftover lines print "bad command" errors on every command.
+extra_host_conf() {
+    [[ -f /etc/host.conf ]] || return 0
+    grep -Eqi '^[[:space:]]*(nospoof|spoof|spoofalert)\b' /etc/host.conf || return 0
+    backup_file /etc/host.conf >/dev/null 2>&1 || true
+    sed -i -E '/^[[:space:]]*(nospoof|spoof|spoofalert)\b/Id' /etc/host.conf && extra_fixed "Removed unsupported nospoof lines from /etc/host.conf"
+}
+
 run_extra_hardening() {
     log_section "Extra Hardening (deterministic checklist)"
+    extra_host_conf
     extra_autologin
     extra_apt_security
     extra_trust_files

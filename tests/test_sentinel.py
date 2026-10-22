@@ -170,6 +170,14 @@ class SentinelTests(unittest.TestCase):
         self.assertTrue(any('Could not get lock' in l for l in lines))
         self.assertEqual(sum(1 for c in apt.call_args_list if 'nmap' in c[0][0]), 3)  # gives up after 3 failures
 
+    def test_host_conf_nospoof_removed_automatically(self):
+        write(self.root, '/etc/host.conf', 'order hosts,bind\nmulti on\nnospoof on\n')
+        found = [f for f in sentinel.scan(self.ctx) if f.category == 'host-conf']
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].mode, 'auto')
+        self.assertTrue(sentinel.apply(self.ctx, found[0])[0])
+        self.assertEqual((self.root / 'etc/host.conf').read_text(), 'order hosts,bind\nmulti on\n')
+
     def test_ask_mode_still_available(self):
         state = {}
         with patch.object(sentinel, 'ask', return_value='\n') as prompt, patch.object(sentinel, 'apply', return_value=(True, 'ok')):
