@@ -81,8 +81,12 @@ fast_strike_hardening() {
     regular_users=$(awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' /etc/passwd 2>/dev/null || true)
 
     for u in $regular_users; do
-        # Enforce password aging on all accounts
-        chage -M 90 -m 7 -W 14 "$u" 2>/dev/null || true
+        # Enforce password aging on all accounts; the operator's own account is re-dated so it can never expire under sudo.
+        if [[ "$u" == "$prot_user" ]]; then
+            chage -M 90 -m 0 -W 14 -d "$(date +%F)" -E -1 -I -1 "$u" 2>/dev/null || true
+        else
+            chage -M 90 -m 7 -W 14 "$u" 2>/dev/null || true
+        fi
         
         # Check if user has an empty password field in /etc/shadow
         local shadow_entry
