@@ -468,6 +468,9 @@ def main():
     import atexit
     atexit.register(repair_protected_aging, engine_dir)
     restore_scoring_service()
+    if '--once' in sys.argv:  # single deterministic pass; the sentinel handles the keep-working loop (no AI)
+        apply_targeted_hardening(engine_dir)
+        return 0
 
     report_path = find_scoring_report()
     if not report_path:

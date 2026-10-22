@@ -228,8 +228,13 @@ run_auto() {
     log_info "Module results: $report"
     repair_operator_aging
     if [[ "${AUTO_REMEDIATE:-0}" == 1 ]]; then
-        python3 "$ENGINE_DIR/lib/score_tracker.py" || true
+        python3 "$ENGINE_DIR/lib/score_tracker.py" --once || true
         repair_operator_aging
+        # Keep working until clean: auto-fix the sure things, ask about the suspicious ones. Ctrl-C stops it.
+        if [[ "${SENTINEL:-1}" == 1 && -t 0 ]]; then
+            python3 "$ENGINE_DIR/lib/sentinel.py" || true
+            repair_operator_aging
+        fi
     fi
     log_warn "Module status is not an image score. Check forensics, README-specific requirements, required services, and the official scoring report."
     (( failed == 0 )) || return 1
