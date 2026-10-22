@@ -36,6 +36,8 @@ DUAL_USE_PACKAGES = 'netcat-openbsd tcpdump socat snort openvpn x11vnc remmina n
 SUID_ABUSABLE = set('find vim vim.basic vi nano python python2 python3 perl ruby bash sh dash zsh cp mv less more awk gawk mawk env nmap tar zip '
                     'unzip nc ncat socat php node lua man tee xxd base64 dd cat head tail sed gdb strace ftp wget curl rsync tclsh'.split())
 SUID_DEFAULT_DIRS = ('/usr/bin', '/bin', '/usr/sbin', '/sbin', '/usr/lib', '/usr/libexec', '/usr/local/bin', '/usr/local/sbin', '/opt', '/home', '/tmp', '/var/tmp')
+PROHIBITED_SERVICES = 'telnet.socket telnetd vsftpd proftpd pure-ftpd tftpd-hpa rsh.socket rlogin.socket rexec.socket snmpd nfs-server rpcbind apache2 lighttpd nginx xinetd xrdp x11vnc'.split()
+SAFE_STOP_SERVICES = 'avahi-daemon cups cups-browsed bluetooth ModemManager whoopsie kerneloops speech-dispatcher colord geoclue apport'.split()
 ROOT_FILES_OK = {'swapfile', 'swap.img', 'initrd.img', 'initrd.img.old', 'vmlinuz', 'vmlinuz.old', '.autorelabel', 'sentinel.lock'}
 CRON_DEFAULT = {'e2scrub_all', 'php', 'popularity-contest', 'anacron', 'sysstat', '.placeholder', 'mdadm', 'certbot', 'ntpsec-ntpdate'}
 TOOL_NAME_RE = re.compile(r'(^|/)(nmap|zenmap|john|hydra|nikto|aircrack|ophcrack|wireshark|netcat|nc|ncat|metasploit|msfconsole|sqlmap|burp|cain|wifite|ettercap|hping)[^/]*$', re.I)
@@ -92,6 +94,13 @@ class Context:
     def suid_files(self):
         out = subprocess.run(['find', '/', '-xdev', '-perm', '-4000', '-type', 'f'], capture_output=True, text=True).stdout
         return out.split()
+
+    def unit_running(self, unit):
+        """True if the systemd unit is active or enabled."""
+        for verb in ('is-active', 'is-enabled'):
+            if subprocess.run(['systemctl', verb, '--quiet', unit], capture_output=True).returncode == 0:
+                return True
+        return False
 
     def password_status(self, user):
         out = subprocess.run(['passwd', '-S', user], capture_output=True, text=True).stdout.split()
@@ -174,6 +183,14 @@ def scan(ctx):
             except (OSError, subprocess.SubprocessError):
                 pass
 
+    # --- services: harmless extras off automatically; risky ones are your call; README services untouched
+    for unit in SAFE_STOP_SERVICES:
+        if not ctx.mentioned(unit.split('.')[0]) and _unit_on(ctx, unit):
+            add('service-off', f'{unit} is a non-essential service', ('disable-unit', unit), 'auto')
+    for unit in PROHIBITED_SERVICES:
+        if not ctx.mentioned(unit.split('.')[0]) and _unit_on(ctx, unit):
+            add('prohibited-service', f'{unit} is running/enabled and not a README critical service', ('disable-unit', unit))
+
     # --- review: accounts
     for u in ctx.passwd_entries():
         name = u['name'].lower()
@@ -230,6 +247,13 @@ def scan(ctx):
     except OSError:
         pass
     return found
+
+
+def _unit_on(ctx, unit):
+    try:
+        return ctx.unit_running(unit)
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def _listdir(path):

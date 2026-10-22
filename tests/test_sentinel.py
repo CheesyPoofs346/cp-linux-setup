@@ -20,6 +20,7 @@ class FakeCtx(sentinel.Context):
     def suid_files(self): return self.suid
     def processes(self): return self.procs
     def password_status(self, user): return self.statuses.get(user, 'P')
+    def unit_running(self, unit): return unit in ('avahi-daemon', 'vsftpd', 'ssh', 'nginx')
 
 
 def write(root, rel, text):
@@ -74,6 +75,15 @@ class SentinelTests(unittest.TestCase):
             self.assertIn(needle, review_texts)
         for clean in ('notes.txt', 'e2scrub_all', 'pid 222', 'alice'):
             self.assertNotIn(clean, review_texts)
+
+    def test_services_safe_auto_prohibited_review_critical_untouched(self):
+        cats = self.by_cat(sentinel.scan(self.ctx))
+        self.assertEqual([(f.action[1], f.mode) for f in cats['service-off']], [('avahi-daemon', 'auto')])
+        self.assertEqual({f.action[1] for f in cats['prohibited-service']}, {'vsftpd', 'nginx'})
+        self.assertTrue(all(f.mode == 'review' for f in cats['prohibited-service']))
+        (self.engine / 'data/readme_parsed.json').write_text(json.dumps({'all_users': [], 'critical_services': ['ssh', 'nginx']}))
+        again = self.by_cat(sentinel.scan(FakeCtx(self.engine, self.root)))
+        self.assertEqual({f.action[1] for f in again['prohibited-service']}, {'vsftpd'})
 
     def test_readme_mentioned_tool_and_operator_are_protected(self):
         FakeCtx.packages = ['wireshark', 'nmap']
