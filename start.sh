@@ -226,6 +226,8 @@ paste_readme() {
 PASTE_MODE=0
 CLI_README=""
 CLI_README_URL=""
+# Automatic forensics is off by default (answer the questions by hand); --forensics turns it on.
+export SKIP_FORENSICS="${SKIP_FORENSICS:-1}"
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -p|--paste|--paste-readme|paste)
@@ -241,6 +243,11 @@ while [[ $# -gt 0 ]]; do
             [[ $# -ge 2 && -n "$2" ]] || { echo "Missing URL for --readme-url" >&2; exit 1; }
             CLI_README_URL="$2"
             shift 2
+            ;;
+        --forensics)
+            export SKIP_FORENSICS=0
+            echo "[+] Automatic forensics enabled."
+            shift
             ;;
         -sf|--skip-forensics)
             export SKIP_FORENSICS=1
