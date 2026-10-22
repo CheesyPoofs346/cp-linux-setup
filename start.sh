@@ -190,12 +190,17 @@ paste_readme() {
     echo "  CYBERPATRIOT README INGESTION"
     echo "================================================================"
     echo "  Paste the full README content below (HTML or plain text)."
-    echo "  When finished, press Enter, then Ctrl+D (or type 'EOF' and Enter):"
+    echo "  When finished, press Enter, then Ctrl+D (or type 'EOF' and Enter)."
+    echo "  Type 'auto' and Enter instead to search for the README on this machine."
     echo "================================================================"
     
-    local line
-    > "$target"
+    local line first=1
+    : > "$target"
     while IFS= read -r line || [[ -n "$line" ]]; do
+        if (( first )); then
+            first=0
+            [[ "${line,,}" == auto ]] && return 2
+        fi
         if [[ "$line" == "EOF" ]]; then
             break
         fi
@@ -249,6 +254,10 @@ while [[ $# -gt 0 ]]; do
             echo "[+] Automatic forensics enabled."
             shift
             ;;
+        --auto-readme)
+            export AUTO_README=1
+            shift
+            ;;
         -sf|--skip-forensics)
             export SKIP_FORENSICS=1
             echo "[+] SKIP_FORENSICS=1 enabled: Forensics module will be bypassed for immediate scoring."
@@ -260,12 +269,20 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-if [[ "$PASTE_MODE" == 1 || "${README_PASTE:-0}" == 1 ]]; then
-    paste_readme || exit 1
-elif [[ -n "$CLI_README" ]]; then
+# Default: paste this image's README by hand (a saved one from an earlier image would be stale).
+# Skip with --readme FILE / --readme-url URL / --auto-readme, or type "auto" at the paste prompt.
+paste_rc=0
+if [[ -n "$CLI_README" ]]; then
     IMAGE_README="$(readlink -f "$CLI_README")"
 elif [[ -n "$CLI_README_URL" ]]; then
     IMAGE_README="$CLI_README_URL"
+elif [[ "$PASTE_MODE" == 1 || "${README_PASTE:-0}" == 1 || ( "${AUTO_README:-0}" != 1 && -t 0 ) ]]; then
+    paste_readme || paste_rc=$?
+    if (( paste_rc == 2 )); then
+        IMAGE_README=""
+    elif (( paste_rc != 0 )); then
+        exit 1
+    fi
 fi
 
 # Auto-detect README if unset or invalid
