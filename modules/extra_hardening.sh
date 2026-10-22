@@ -153,6 +153,64 @@ extra_tmp_sticky() {
     done
 }
 
+extra_audit_apparmor() {
+    command_exists systemctl || return 0
+    if ! dpkg -s auditd >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y auditd >/dev/null 2>&1 && extra_fixed "Installed auditd"
+    fi
+    systemctl enable --now auditd >/dev/null 2>&1 && extra_fixed "auditd enabled"
+    if systemctl list-unit-files apparmor.service 2>/dev/null | grep -q apparmor; then
+        systemctl is-active --quiet apparmor || { systemctl enable --now apparmor >/dev/null 2>&1 && extra_fixed "AppArmor enabled"; }
+    fi
+    return 0
+}
+
+# Lock the screen after 5 idle minutes and require a password (Cinnamon/Mint and GNOME), system-wide via dconf defaults.
+extra_screen_lock() {
+    command_exists dconf || [[ -d /etc/dconf ]] || return 0
+    local db=/etc/dconf/db/local.d prof=/etc/dconf/profile/user f="$db/00-cp-screenlock"
+    [[ -f "$f" ]] && return 0
+    mkdir -p "$db" /etc/dconf/profile 2>/dev/null || return 0
+    cat > "$f" <<'DCONF'
+[org/gnome/desktop/screensaver]
+lock-enabled=true
+lock-delay=uint32 0
+idle-activation-enabled=true
+
+[org/gnome/desktop/session]
+idle-delay=uint32 300
+
+[org/cinnamon/desktop/screensaver]
+lock-enabled=true
+lock-delay=uint32 0
+
+[org/cinnamon/desktop/session]
+idle-delay=uint32 300
+DCONF
+    [[ -f "$prof" ]] || printf 'user-db:user\nsystem-db:local\n' > "$prof"
+    grep -q 'system-db:local' "$prof" || echo 'system-db:local' >> "$prof"
+    dconf update 2>/dev/null || true
+    extra_fixed "Screen lock set (5 min idle, password required)"
+}
+
+# System-wide Firefox policy (deb and snap): popup blocking, safe browsing, no saved logins.
+extra_firefox_policy() {
+    local dir f
+    for dir in /etc/firefox/policies /usr/lib/firefox/distribution /etc/firefox/distribution; do
+        [[ -d "$(dirname "$dir")" ]] || continue
+        f="$dir/policies.json"
+        [[ -f "$f" ]] && grep -q PopupBlocking "$f" && continue
+        mkdir -p "$dir" 2>/dev/null || continue
+        cat > "$f" <<'JSON'
+{"policies":{"PopupBlocking":{"Default":true},"OfferToSaveLogins":false,"PasswordManagerEnabled":false,"DisableAppUpdate":false,
+"Preferences":{"browser.safebrowsing.malware.enabled":{"Value":true,"Status":"locked"},"browser.safebrowsing.phishing.enabled":{"Value":true,"Status":"locked"},"dom.disable_open_during_load":{"Value":true,"Status":"locked"}}}}
+JSON
+        extra_fixed "Firefox policy written: $f"
+        break
+    done
+    return 0
+}
+
 run_extra_hardening() {
     log_section "Extra Hardening (deterministic checklist)"
     extra_autologin
@@ -164,6 +222,9 @@ run_extra_hardening() {
     extra_sudoers_authenticate
     extra_startup_backdoors
     extra_tmp_sticky
+    extra_audit_apparmor
+    extra_screen_lock
+    extra_firefox_policy
     log_success "Extra hardening complete ($EXTRA_FIXES change(s))"
     return 0
 }

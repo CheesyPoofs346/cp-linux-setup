@@ -51,6 +51,8 @@ class SentinelTests(unittest.TestCase):
         write(self.root, '/home/bob/Downloads/hack.sh', 'echo\n')
         write(self.root, '/home/bob/Documents/notes.txt', 'ok\n')
         write(self.root, '/stray.bin', 'x')
+        write(self.root, '/home/bob/.mozilla/firefox/abc.default/prefs.js', '// prefs\n')
+        (self.root / 'home/alice/Desktop').mkdir(parents=True)
         with patch.dict(os.environ, {'SUDO_USER': 'alice'}):
             self.ctx = FakeCtx(self.engine, self.root)
 
@@ -143,6 +145,20 @@ class SentinelTests(unittest.TestCase):
         self.assertEqual(len(sentinel.load_pending(self.ctx)), len(pending) - 1)
         self.assertEqual(sentinel.run_fix(self.ctx, 'all', dismiss=True, log=lines.append), len(pending) - 1)
         self.assertEqual(sentinel.load_pending(self.ctx), [])
+
+    def test_firefox_profile_hardened_once_and_desktop_report_written(self):
+        state, lines = {}, []
+        with patch.object(sentinel, 'notify'):
+            sentinel.one_pass(self.ctx, state, log=lines.append)
+            sentinel.one_pass(self.ctx, state, log=lines.append)
+        userjs = (self.root / 'home/bob/.mozilla/firefox/abc.default/user.js').read_text()
+        self.assertIn('dom.disable_open_during_load', userjs)
+        self.assertEqual(userjs.count('signon.rememberSignons'), 1)  # idempotent
+        report = (self.root / 'home/alice/Desktop/SENTINEL-ALERTS.md').read_text()
+        self.assertIn('## Needs your eyes', report)
+        self.assertIn('mallory', report)
+        self.assertIn('## Fixed automatically', report)
+        self.assertIn('firefox:', report)
 
     def test_ask_mode_still_available(self):
         state = {}

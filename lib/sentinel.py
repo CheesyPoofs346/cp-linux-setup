@@ -38,6 +38,15 @@ SUID_ABUSABLE = set('find vim vim.basic vi nano python python2 python3 perl ruby
 SUID_DEFAULT_DIRS = ('/usr/bin', '/bin', '/usr/sbin', '/sbin', '/usr/lib', '/usr/libexec', '/usr/local/bin', '/usr/local/sbin', '/opt', '/home', '/tmp', '/var/tmp')
 PROHIBITED_SERVICES = 'telnet.socket telnetd vsftpd proftpd pure-ftpd tftpd-hpa rsh.socket rlogin.socket rexec.socket snmpd nfs-server rpcbind apache2 lighttpd nginx xinetd xrdp x11vnc'.split()
 SAFE_STOP_SERVICES = 'avahi-daemon cups cups-browsed bluetooth ModemManager whoopsie kerneloops speech-dispatcher colord geoclue apport'.split()
+FIREFOX_PREFS = [
+    'user_pref("dom.disable_open_during_load", true);',
+    'user_pref("browser.safebrowsing.malware.enabled", true);',
+    'user_pref("browser.safebrowsing.phishing.enabled", true);',
+    'user_pref("browser.safebrowsing.downloads.enabled", true);',
+    'user_pref("signon.rememberSignons", false);',
+    'user_pref("app.update.auto", true);',
+    'user_pref("privacy.donottrackheader.enabled", true);',
+]
 ROOT_FILES_OK = {'swapfile', 'swap.img', 'initrd.img', 'initrd.img.old', 'vmlinuz', 'vmlinuz.old', '.autorelabel', 'sentinel.lock'}
 CRON_DEFAULT = {'e2scrub_all', 'php', 'popularity-contest', 'anacron', 'sysstat', '.placeholder', 'mdadm', 'certbot', 'ntpsec-ntpdate'}
 TOOL_NAME_RE = re.compile(r'(^|/)(nmap|zenmap|john|hydra|nikto|aircrack|ophcrack|wireshark|netcat|nc|ncat|metasploit|msfconsole|sqlmap|burp|cain|wifite|ettercap|hping)[^/]*$', re.I)
@@ -182,6 +191,20 @@ def scan(ctx):
                     add('empty-password', f"{u['name']} has no password", ('lock-user', u['name']), 'auto')
             except (OSError, subprocess.SubprocessError):
                 pass
+
+    # --- auto: Firefox hardening in every profile (user.js is applied at each start)
+    for pattern in ('home/*/.mozilla/firefox/*/prefs.js', 'home/*/snap/firefox/common/.mozilla/firefox/*/prefs.js'):
+        for prefs in sorted(ctx.root.glob(pattern)):
+            userjs = prefs.with_name('user.js')
+            have = set()
+            try:
+                have = {l.strip() for l in userjs.read_text(encoding='utf-8', errors='replace').splitlines()}
+            except OSError:
+                pass
+            missing = [l for l in FIREFOX_PREFS if l not in have]
+            if missing:
+                rel = '/' + str(userjs.relative_to(ctx.root)).replace(os.sep, '/')
+                add('firefox', f'{rel} lacks {len(missing)} secure Firefox setting(s)', ('ensure-lines', rel, missing), 'auto')
 
     # --- services: harmless extras off automatically; risky ones are your call; README services untouched
     for unit in SAFE_STOP_SERVICES:
@@ -339,6 +362,22 @@ def apply(ctx, finding):
             _backup(ctx, path)
             tmp.replace(path)
             return True, f'commented sudo rule in {act[1]}'
+        if kind == 'ensure-lines':
+            path = ctx.p(act[1])
+            existing = path.read_text(encoding='utf-8', errors='replace') if path.exists() else ''
+            have = {l.strip() for l in existing.splitlines()}
+            add_lines = [l for l in act[2] if l not in have]
+            _backup(ctx, path)
+            with open(path, 'a', encoding='utf-8') as fh:
+                if existing and not existing.endswith('\n'):
+                    fh.write('\n')
+                fh.write('\n'.join(add_lines) + '\n')
+            try:
+                st = path.parent.joinpath('prefs.js').stat()
+                os.chown(path, st.st_uid, st.st_gid)
+            except OSError:
+                pass
+            return True, f'ensured {len(add_lines)} setting(s) in {act[1]}'
         if kind == 'lock-user':
             return run(['passwd', '-l', act[1]]).returncode == 0, f'locked {act[1]}'
         if kind == 'userdel':
@@ -420,6 +459,51 @@ def score_line(engine_dir):
         return None, None
 
 
+def log_path(ctx):
+    return ctx.engine_dir / 'data/sentinel-log.json'
+
+
+def record_fix(ctx, text):
+    try:
+        entries = json.loads(log_path(ctx).read_text())
+    except (OSError, ValueError):
+        entries = []
+    entries.append(f"{time.strftime('%H:%M:%S')} {text}")
+    log_path(ctx).parent.mkdir(parents=True, exist_ok=True)
+    log_path(ctx).write_text(json.dumps(entries[-200:], indent=1))
+
+
+def desktop_md_path(ctx):
+    user = os.environ.get('SUDO_USER', '')
+    candidates = [ctx.p(f'/home/{user}/Desktop')] if user else []
+    candidates += sorted(ctx.root.glob('home/*/Desktop'))
+    for d in candidates:
+        if d.is_dir():
+            return d / 'SENTINEL-ALERTS.md'
+    return None
+
+
+def write_desktop_md(ctx, items, text_cmds):
+    path = desktop_md_path(ctx)
+    if not path:
+        return
+    try:
+        fixed = json.loads(log_path(ctx).read_text())
+    except (OSError, ValueError):
+        fixed = []
+    out = ['# Sentinel report', '', f"_Updated {time.strftime('%H:%M:%S')}_", '']
+    out += [f'## Needs your eyes ({len(items)})', '']
+    out += [f"- [ ] **{i}.** `{it['category']}` {it['text']}" for i, it in enumerate(items, 1)] or ['_Nothing pending - all clear._']
+    out += ['', '**Fix some:** ' + text_cmds, '', f'## Fixed automatically ({len(fixed)})', '']
+    out += [f'- {line}' for line in fixed[-40:]] or ['_Nothing yet._']
+    try:
+        path.write_text('\n'.join(out) + '\n', encoding='utf-8')
+        st = path.parent.stat()
+        os.chown(path, st.st_uid, st.st_gid)
+    except OSError:
+        pass
+
+
 def pending_path(ctx):
     return ctx.engine_dir / 'data/sentinel-pending.json'
 
@@ -440,6 +524,7 @@ def save_pending(ctx, items):
               'To dismiss:   sudo python3 ~/cp-linux-setup/lib/sentinel.py --dismiss all']
     text = '\n'.join(lines) + '\n'
     (ctx.engine_dir / 'data/sentinel-review.txt').write_text(text)
+    write_desktop_md(ctx, items, '`sudo python3 ~/cp-linux-setup/lib/sentinel.py --fix 1,3` (or `--fix all`, `--dismiss all`)')
     return text
 
 
@@ -477,6 +562,8 @@ def run_fix(ctx, selection, dismiss=False, log=print):
             ok, msg = apply(ctx, Finding(it['category'], it['text'], tuple(it['action'])))
             state[it['key']] = 'done' if ok else 'failed'
             log(f"  [{'fixed' if ok else 'FAILED'}] {msg}")
+            if ok:
+                record_fix(ctx, f"{it['category']}: {it['text']}")
             if not ok:
                 keep.append(it)
     save_state(ctx, state)
@@ -491,6 +578,8 @@ def one_pass(ctx, state, auto_only=False, ask_mode=False, log=print):
         ok, msg = apply(ctx, f)
         state[f.key] = 'done' if ok else 'failed'
         log(f"  [auto] {'fixed' if ok else 'FAILED'}: {f.text} -> {msg}")
+        if ok:
+            record_fix(ctx, f'{f.category}: {f.text}')
     review = [f for f in findings if f.mode == 'review' and state.get(f.key) not in ('kept', 'done')]
     fresh = [f for f in review if f.key not in state]
     if review and not auto_only:
@@ -517,6 +606,8 @@ def one_pass(ctx, state, auto_only=False, ask_mode=False, log=print):
                 save_pending(ctx, items)
     elif not review:
         save_pending(ctx, [])
+    if new_auto and not review and not auto_only:
+        save_pending(ctx, [])
     return len(new_auto), len(fresh)
 
 
@@ -538,8 +629,9 @@ def main():
         return 0
     state = load_state(ctx)
     print('Sentinel: scanning and fixing until the image is clean (Ctrl-C to stop).', flush=True)
-    last_score, quiet = None, 0
+    last_score, quiet, rounds = None, 0, 0
     while True:
+        rounds += 1
         fixed, pending = one_pass(ctx, state, args.auto_only, args.ask)
         save_state(ctx, state)
         score, max_score = score_line(engine_dir)
@@ -557,7 +649,7 @@ def main():
             print('  Nothing new for 3 passes; still watching every %ds (Ctrl-C to stop).' % args.interval, flush=True)
             quiet = 0
         try:
-            time.sleep(args.interval)
+            time.sleep(15 if rounds <= 3 else args.interval)  # quick early rounds, then settle
         except KeyboardInterrupt:
             print('\nSentinel stopped.')
             return 0
