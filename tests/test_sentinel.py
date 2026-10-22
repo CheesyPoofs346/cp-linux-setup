@@ -120,14 +120,35 @@ class SentinelTests(unittest.TestCase):
         (self.root / 'somedir').mkdir()
         self.assertFalse(sentinel.apply(self.ctx, sentinel.Finding('x', 'y', ('rm', '/somedir')))[0])
 
-    def test_pass_remembers_decisions_and_asks_once(self):
+    def test_review_items_alert_without_blocking_and_are_fixable_later(self):
         state, lines = {}, []
-        with patch.object(sentinel, 'ask', return_value='\n'), patch.object(sentinel, 'apply', return_value=(True, 'ok')):
-            auto1, review1 = sentinel.one_pass(self.ctx, state, log=lines.append)
-        self.assertGreater(review1, 0)
-        with patch.object(sentinel, 'ask', side_effect=AssertionError('asked twice')), patch.object(sentinel, 'apply', return_value=(True, 'ok')):
-            auto2, review2 = sentinel.one_pass(self.ctx, state, log=lines.append)
-        self.assertEqual((auto2, review2), (0, 0))
+        with patch.object(sentinel, 'ask', side_effect=AssertionError('must not block')), patch.object(sentinel, 'notify'), \
+                patch.object(sentinel, 'apply', return_value=(True, 'ok')):
+            auto1, fresh1 = sentinel.one_pass(self.ctx, state, log=lines.append)
+        self.assertGreater(fresh1, 0)
+        self.assertTrue(any('ALERT' in l for l in lines))
+        pending = sentinel.load_pending(self.ctx)
+        self.assertTrue(pending)
+        self.assertIn('mallory', (self.engine / 'data/sentinel-review.txt').read_text())
+        with patch.object(sentinel, 'ask', side_effect=AssertionError('asked')), patch.object(sentinel, 'notify') as popup, \
+                patch.object(sentinel, 'apply', return_value=(True, 'ok')):
+            auto2, fresh2 = sentinel.one_pass(self.ctx, state, log=lines.append)
+        self.assertEqual((auto2, fresh2), (0, 0))
+        popup.assert_not_called()  # no repeat popups for the same items
+        first = pending[0]
+        with patch.object(sentinel, 'apply', return_value=(True, 'ok')) as fix:
+            sentinel.save_state(self.ctx, state)
+            self.assertEqual(sentinel.run_fix(self.ctx, '1', log=lines.append), 1)
+        self.assertEqual(fix.call_args[0][1].text, first['text'])
+        self.assertEqual(len(sentinel.load_pending(self.ctx)), len(pending) - 1)
+        self.assertEqual(sentinel.run_fix(self.ctx, 'all', dismiss=True, log=lines.append), len(pending) - 1)
+        self.assertEqual(sentinel.load_pending(self.ctx), [])
+
+    def test_ask_mode_still_available(self):
+        state = {}
+        with patch.object(sentinel, 'ask', return_value='\n') as prompt, patch.object(sentinel, 'apply', return_value=(True, 'ok')):
+            sentinel.one_pass(self.ctx, state, ask_mode=True, log=lambda *_: None)
+        prompt.assert_called_once()
 
     def test_parse_picks(self):
         self.assertEqual(sentinel.parse_picks('1,3', 5), [0, 2])

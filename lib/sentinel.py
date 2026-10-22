@@ -3,11 +3,11 @@
 
 Each pass scans for CyberPatriot-style problems and splits them in two:
   auto    high confidence (hacking tools, SUID shells, backdoor lines, NOPASSWD, empty passwords)  -> fixed immediately
-  review  "kinda sus" (odd cron/services/keys/files/users/processes)  -> you pick which to fix; nothing is removed unasked
+  review  "kinda sus" (odd cron/services/keys/files/users/processes)  -> ALERT (screen, popup, data/sentinel-review.txt); fix with --fix
 It re-reads the scoring report each pass, prints the score, and stops at full points (or Ctrl-C / q).
 Decisions are remembered in data/sentinel-state.json so nothing is asked twice.
 
-Usage: sentinel.py [--once] [--interval SECONDS] [--auto-only] [--root /]
+Usage: sentinel.py [--once] [--interval SECONDS] [--auto-only] [--ask] [--fix N,N|all] [--dismiss N,N|all]
 """
 import argparse
 import hashlib
@@ -420,31 +420,104 @@ def score_line(engine_dir):
         return None, None
 
 
-def one_pass(ctx, state, auto_only=False, log=print):
+def pending_path(ctx):
+    return ctx.engine_dir / 'data/sentinel-pending.json'
+
+
+def load_pending(ctx):
+    try:
+        return json.loads(pending_path(ctx).read_text())
+    except (OSError, ValueError):
+        return []
+
+
+def save_pending(ctx, items):
+    pending_path(ctx).parent.mkdir(parents=True, exist_ok=True)
+    pending_path(ctx).write_text(json.dumps(items, indent=1))
+    lines = ['SENTINEL: things I could not safely decide - please check these', '']
+    lines += [f"{i:>2}. [{it['category']}] {it['text']}" for i, it in enumerate(items, 1)]
+    lines += ['', 'To fix some:  sudo python3 ~/cp-linux-setup/lib/sentinel.py --fix 1,3     (or --fix all)',
+              'To dismiss:   sudo python3 ~/cp-linux-setup/lib/sentinel.py --dismiss all']
+    text = '\n'.join(lines) + '\n'
+    (ctx.engine_dir / 'data/sentinel-review.txt').write_text(text)
+    return text
+
+
+def notify(ctx, message):
+    """Best-effort desktop popup for the logged-in user, plus a file on their Desktop."""
+    user = os.environ.get('SUDO_USER', '')
+    try:
+        if user and ctx.root == Path('/'):
+            uid = subprocess.run(['id', '-u', user], capture_output=True, text=True).stdout.strip()
+            env = dict(os.environ, DISPLAY=':0', DBUS_SESSION_BUS_ADDRESS=f'unix:path=/run/user/{uid}/bus')
+            subprocess.run(['sudo', '-u', user, 'notify-send', '-u', 'critical', 'Sentinel: check these', message[:200]], env=env, capture_output=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def publish_alert(ctx, items, log):
+    text = save_pending(ctx, items)
+    log('\n' + '=' * 62 + f"\n  ALERT: {len(items)} item(s) need your eyes - I scanned and found these:\n" + '=' * 62)
+    for i, it in enumerate(items, 1):
+        log(f"   {i:>2}. [{it['category']}] {it['text']}")
+    log('\n  Fix some:  sudo python3 lib/sentinel.py --fix 1,3   (or --fix all) from a second terminal.\n  Full list: data/sentinel-review.txt\n' + '=' * 62)
+    notify(ctx, f'{len(items)} suspicious item(s) found. See data/sentinel-review.txt')
+
+
+def run_fix(ctx, selection, dismiss=False, log=print):
+    state, items = load_state(ctx), load_pending(ctx)
+    picks = parse_picks(selection, len(items))
+    keep = []
+    for i, it in enumerate(items):
+        if i not in picks:
+            keep.append(it)
+        elif dismiss:
+            state[it['key']] = 'kept'
+        else:
+            ok, msg = apply(ctx, Finding(it['category'], it['text'], tuple(it['action'])))
+            state[it['key']] = 'done' if ok else 'failed'
+            log(f"  [{'fixed' if ok else 'FAILED'}] {msg}")
+            if not ok:
+                keep.append(it)
+    save_state(ctx, state)
+    save_pending(ctx, keep)
+    return len(picks)
+
+
+def one_pass(ctx, state, auto_only=False, ask_mode=False, log=print):
     findings = scan(ctx)
     new_auto = [f for f in findings if f.mode == 'auto' and state.get(f.key) != 'done']
     for f in new_auto:
         ok, msg = apply(ctx, f)
         state[f.key] = 'done' if ok else 'failed'
         log(f"  [auto] {'fixed' if ok else 'FAILED'}: {f.text} -> {msg}")
-    review = [f for f in findings if f.mode == 'review' and f.key not in state]
+    review = [f for f in findings if f.mode == 'review' and state.get(f.key) not in ('kept', 'done')]
+    fresh = [f for f in review if f.key not in state]
     if review and not auto_only:
-        log(f'\n  {len(review)} item(s) look suspicious - YOU decide (nothing is removed unless picked):')
-        for i, f in enumerate(review, 1):
-            log(f'   {i:>2}. [{f.category}] {f.text}')
-        answer = ask('  Fix which? (numbers like 1,3 or 2-4, "all", Enter = none): ')
-        picks = parse_picks(answer or '', len(review)) if answer is not None else []
-        for i, f in enumerate(review):
-            if i in picks:
-                ok, msg = apply(ctx, f)
-                state[f.key] = 'done' if ok else 'failed'
-                log(f"  [{'fixed' if ok else 'FAILED'}] {msg}")
-            elif answer is not None:
-                state[f.key] = 'kept'
-        if answer is None:
-            Path(ctx.engine_dir / 'data/sentinel-review.txt').write_text('\n'.join(f'[{f.category}] {f.text}' for f in review))
-            log('  (no terminal: suspicious items saved to data/sentinel-review.txt)')
-    return len(new_auto), len(review)
+        if ask_mode:
+            log(f'\n  {len(review)} item(s) look suspicious - YOU decide (nothing is removed unless picked):')
+            for i, f in enumerate(review, 1):
+                log(f'   {i:>2}. [{f.category}] {f.text}')
+            answer = ask('  Fix which? (numbers like 1,3 or 2-4, "all", Enter = none): ')
+            picks = parse_picks(answer or '', len(review)) if answer is not None else []
+            for i, f in enumerate(review):
+                if i in picks:
+                    ok, msg = apply(ctx, f)
+                    state[f.key] = 'done' if ok else 'failed'
+                    log(f"  [{'fixed' if ok else 'FAILED'}] {msg}")
+                elif answer is not None:
+                    state[f.key] = 'kept'
+        else:
+            for f in fresh:
+                state[f.key] = 'alerted'
+            items = [{'key': f.key, 'category': f.category, 'text': f.text, 'action': list(f.action)} for f in review]
+            if fresh or not pending_path(ctx).exists():
+                publish_alert(ctx, items, log)
+            else:
+                save_pending(ctx, items)
+    elif not review:
+        save_pending(ctx, [])
+    return len(new_auto), len(fresh)
 
 
 def main():
@@ -453,14 +526,21 @@ def main():
     ap.add_argument('--interval', type=int, default=60)
     ap.add_argument('--auto-only', action='store_true')
     ap.add_argument('--root', default='/')
+    ap.add_argument('--ask', action='store_true', help='stop and ask about suspicious items instead of alerting')
+    ap.add_argument('--fix', metavar='N,N|all', help='apply fixes for alerted items, then exit')
+    ap.add_argument('--dismiss', metavar='N,N|all', help='mark alerted items as fine, then exit')
     args = ap.parse_args()
     engine_dir = Path(__file__).resolve().parents[1]
     ctx = Context(engine_dir, args.root)
+    if args.fix or args.dismiss:
+        count = run_fix(ctx, args.fix or args.dismiss, dismiss=bool(args.dismiss))
+        print(f'  {count} item(s) handled.')
+        return 0
     state = load_state(ctx)
     print('Sentinel: scanning and fixing until the image is clean (Ctrl-C to stop).', flush=True)
     last_score, quiet = None, 0
     while True:
-        fixed, pending = one_pass(ctx, state, args.auto_only)
+        fixed, pending = one_pass(ctx, state, args.auto_only, args.ask)
         save_state(ctx, state)
         score, max_score = score_line(engine_dir)
         if score is not None:
