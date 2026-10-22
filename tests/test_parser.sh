@@ -10,13 +10,13 @@ printf '%s\n' '<h2>Authorized Administrators:</h2><p>operator:secret (YOU)<br></
 source "$TEST_DIR/modules/readme_parser.sh"
 export OPENROUTER_API_KEY=test
 GOOD='{"all_users":[{"name":"operator","account_type":"admin","groups":[]},{"name":"member","account_type":"standard","groups":[]}],"recent_hires":[],"terminated_users":[],"critical_services":["ssh"],"groups_to_create":[],"system_users_to_restrict":[]}'
-invoke_readme_extraction() { printf '%s\n' "$GOOD"; }
+invoke_readme_extraction() { echo "FAIL: AI called for a cleanly structured README"; return 1; }
 parse_readme "$TEST_DIR/README.html"
 [[ "$README_PARSED" == 1 ]]
 # AI omits a user: deterministic users win, AI-only fields (terminated) are kept.
 OMIT=$(jq '.all_users |= .[0:1] | .terminated_users = ["mallory"]' <<<"$GOOD")
 invoke_readme_extraction() { printf '%s\n' "$OMIT"; }
-AUTO_REMEDIATE=1 parse_readme "$TEST_DIR/README.html"
+README_AI=always AUTO_REMEDIATE=1 parse_readme "$TEST_DIR/README.html"
 [[ "$(jq -r '[.all_users[].name] | join(",")' <<<"$README_DATA")" == operator,member ]]
 [[ "$(jq -r '.terminated_users | join(",")' <<<"$README_DATA")" == mallory ]]
 # AI call fails: deterministic parse still authorizes the README's explicit lists.

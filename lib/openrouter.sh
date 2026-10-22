@@ -154,7 +154,7 @@ invoke_readme_extraction() {
     fi
     # Make API request
     local response attempt
-    for attempt in 1 2 3 4 5 6; do
+    for attempt in $(seq 1 "${AI_HTTP_RETRIES:-6}"); do
         response=$(curl -sS --connect-timeout 15 --max-time "${AI_TIMEOUT_SECONDS:-180}" -X POST "$OPENROUTER_API_URL" \
             -H "Authorization: Bearer $OPENROUTER_API_KEY" \
             -H "Content-Type: application/json" \
@@ -164,7 +164,7 @@ invoke_readme_extraction() {
         if [[ -n "$response" ]] && ! grep -qiE '"(code|status)": *(429|50[0-4])|rate.?limit|too many requests' <<<"$response"; then
             break
         fi
-        log_warn "AI request throttled or failed (attempt $attempt/6); retrying..."
+        log_warn "AI request throttled or failed (attempt $attempt/${AI_HTTP_RETRIES:-6}); retrying..."
         sleep $((attempt * 8))
     done
     if [[ -z "$response" ]]; then

@@ -134,7 +134,14 @@ parse_readme() {
     local json_data="" ai_response="" ai_json="" det_file have_det=0
     det_file=$(mktemp)
     python3 "$SCRIPT_DIR/../lib/readme_extract.py" "$readme_path" "$det_file" >/dev/null 2>&1 && have_det=1
-    if [[ -n "${OPENROUTER_API_KEY:-}" ]] && ai_response=$(invoke_readme_extraction "$plain_text" "$readme_path"); then
+    local det_hints=""
+    (( have_det )) && det_hints=$(jq -r '.unparsed_hints | join("")' "$det_file")
+    if (( have_det )) && [[ -z "$det_hints" && "${README_AI:-auto}" != always ]]; then
+        # A cleanly structured README needs no model: users, admins and services come straight from its lists.
+        log_info "README parsed directly from its Authorized Users/Administrators/Services lists (AI skipped)"
+        json_data=$(jq 'del(.passwords, .unparsed_hints)' "$det_file")
+    elif [[ -n "${OPENROUTER_API_KEY:-}" ]] && log_info "Asking AI to read the README (short timeout; falls back to the parsed lists)..." \
+            && ai_response=$(AI_TIMEOUT_SECONDS=45 AI_HTTP_RETRIES=2 invoke_readme_extraction "$plain_text" "$readme_path"); then
         echo "$ai_response" > "$SCRIPT_DIR/../data/readme_ai_response.txt"
         if ai_json=$(extract_json_from_response "$ai_response") && jq -e '.all_users' <<<"$ai_json" >/dev/null 2>&1; then
             json_data="$ai_json"
