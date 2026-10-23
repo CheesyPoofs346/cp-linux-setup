@@ -402,11 +402,7 @@ run_prohibited_files() {
         return 0
     fi
 
-    if [[ "${AUTO_REMEDIATE:-0}" == 1 ]]; then
-        log_info "Auto-remediation active: automatically purging prohibited media files from /home and /root..."
-        find /home /root -type f \( -iname "*.mp3" -o -iname "*.mp4" -o -iname "*.wav" -o -iname "*.avi" -o -iname "*.mkv" -o -iname "*.flac" -o -iname "*.mov" -o -iname "*.ogg" -o -iname "*.wma" -o -iname "*.wmv" -o -iname "*.m4a" \) -delete 2>/dev/null || true
-        rm -rf /home/*/{Music,Videos,Downloads}/*.{mp3,mp4,wav,avi,mkv,flac,mov,ogg,wma,wmv,m4a} 2>/dev/null || true
-    fi
+    # Policy-aware, backed-up media remediation is handled by sentinel.
 
     if check_openrouter_config; then
         log_info "Submitting candidate list for automated triage..."

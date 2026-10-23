@@ -494,9 +494,12 @@ def solve_file_hash(ev, question, number=0):
 
 def solve_base64(ev, question, number=0):
     found = []
+    named = {p.rstrip('.,;:') for p in re.findall(r'/[\w./-]+', question_body(question['content']))}
     for home in ev.user_homes():
         for f in ev.walk([str(home)], max_depth=3):
             try:
+                if named and ev.logical(f) not in named:
+                    continue
                 if f.stat().st_size > 20000 or SKIP_FILE_NAMES.match(f.name) or f.name.startswith('.'):
                     continue
                 raw = f.read_text(errors='ignore').strip()
@@ -561,9 +564,11 @@ def solve_file_dir(ev, question, number=0):
     """'Which directory holds the (mp3 / video / picture ...) files?' - the folder with most such files."""
     text = question_body(question['content']).lower()
     exts = set(re.findall(r'\.([a-z0-9]{2,5})\b', text)) & set().union(*MEDIA_GROUPS.values())
+    keywords = {'audio': r'audio|music|song', 'video': r'video|movie',
+                'picture': r'picture|photo', 'document': r'document', 'archive': r'archive'}
     for name, group in MEDIA_GROUPS.items():
-        if re.search(name + r'|music|song|movie|photo', text):
-            exts |= group if name != 'audio' or re.search(r'audio|music|song|media', text) else set()
+        if re.search(r'\b(?:' + keywords[name] + r')s?\b', text):
+            exts |= group
     for ext in set().union(*MEDIA_GROUPS.values()):
         if re.search(r'\b' + ext + r'\b', text):
             exts.add(ext)
@@ -587,7 +592,15 @@ def solve_file_dir(ev, question, number=0):
             'why': f'{best[1]} matching file(s) in {best[0]}', 'candidates': [r[0] for r in ranked[:5]]}
 
 
+def solve_uid_zero(ev, question, number=0):
+    candidates = [u['name'] for u in ev.passwd() if u['uid'] == 0 and u['name'] != 'root']
+    if len(candidates) != 1:
+        return None
+    return {'answers': candidates, 'confidence': 'high', 'why': 'Unique non-root account with UID 0 in /etc/passwd'}
+
+
 SOLVERS = [
+    (re.compile(r'\b(?:uid|user id)\s*(?:of\s*)?(?:=|:)?\s*0\b', re.I), solve_uid_zero, 'user'),
     (re.compile(r'(director|folder|path|location).{0,80}(mp3|mp4|music|audio|video|media|picture|photo|\.\w{3,4} files)|(mp3|mp4|music|audio|video|media)[^.\n]{0,60}(director|folder|located|location)', re.I | re.S), solve_file_dir, 'path'),
     (re.compile(r'hidden (user|account)|secret (user|account)|user.*(was|has been) created.*(after|attack)|malicious.*user(name)?', re.I), solve_hidden_user, 'user'),
     (re.compile(r'(authentication|login|password).*(sabotag|tamper|modif|broken|backdoor|mechanism)|sabotag.*(authentication|pam)|(pam|authentication).*(file|path)', re.I), solve_auth_file, 'path'),
@@ -623,12 +636,15 @@ def solve(question, ev):
     return None
 
 
-def run(directories, root='/', readme_text='', dry=False, guess=True):
+def run(directories, root='/', readme_text='', dry=False, guess=False, backup_dir=None):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import forensics_agent as fa
     ev = Evidence(root, readme_text, users=readme_users(readme_text))
     questions = fa.discover(directories)
     out = []
+    if backup_dir is not None and not dry:
+        Path(backup_dir).mkdir(parents=True, exist_ok=True)
+        backup_dir = Path(tempfile.mkdtemp(prefix='run-', dir=backup_dir))
     for q in questions:
         lines = q['content'].splitlines()
         placeholders = [l for l in lines if re.match(r'^\s*ANSWER\s*:', l, re.I)]
@@ -641,7 +657,7 @@ def run(directories, root='/', readme_text='', dry=False, guess=True):
         if result and len(placeholders) == len(result['answers']) and (result['confidence'] == 'high' or guess):
             if not dry:
                 try:
-                    fa.apply_answers(q, result['answers'], Path(tempfile.mkdtemp(prefix='forensics-det-')))
+                    fa.apply_answers(q, result['answers'], Path(backup_dir) if backup_dir else Path(tempfile.mkdtemp(prefix='forensics-det-')))
                     entry['status'] = 'applied'
                 except (ValueError, OSError) as error:
                     entry['status'] = f'not applied: {error}'
@@ -668,6 +684,8 @@ def main():
     parser.add_argument('--readme')
     parser.add_argument('--dry', action='store_true')
     parser.add_argument('--no-guess', action='store_true')
+    parser.add_argument('--guess', action='store_true', help='Opt in to applying ambiguous medium-confidence suggestions')
+    parser.add_argument('--report', default=str(Path(__file__).resolve().parents[1] / 'data/forensics-det.json'))
     args = parser.parse_args()
     readme = ''
     for candidate in filter(None, [args.readme, os.environ.get('README_FILE'), str(Path(__file__).resolve().parents[1] / 'data/auto-source.html')]):
@@ -677,7 +695,10 @@ def main():
         except OSError:
             continue
     dirs = [Path(d) for d in args.dir] if args.dir else list(Path(args.root, 'home').glob('*/Desktop')) + [Path(args.root, 'root/Desktop')]
-    results = run(dirs, args.root, readme, args.dry, guess=not args.no_guess)
+    report = Path(args.report)
+    report.parent.mkdir(parents=True, exist_ok=True)
+    results = run(dirs, args.root, readme, args.dry, guess=args.guess and not args.no_guess, backup_dir=report.parent / 'forensics-det-backups')
+    report.write_text(json.dumps(results, indent=2), encoding='utf-8')
     for r in results:
         res = r.get('result') or {}
         print(f"Question {r['number']}: {r['status']} -> {res.get('answers')} [{res.get('confidence', '-')}] {res.get('why', '')}", flush=True)

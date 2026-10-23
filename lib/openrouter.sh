@@ -18,6 +18,7 @@ OPENROUTER_MODEL="${OPENROUTER_MODEL:-openrouter/free}"
 
 # Configure after config.conf is loaded. Keep compatibility names for existing modules.
 configure_ai() {
+    [[ "${CP_NO_AI:-0}" == 1 ]] && return 0
     case "${AI_PROVIDER:-openrouter}" in
         openrouter) OPENROUTER_API_URL="https://openrouter.ai/api/v1/chat/completions" ;;
         nvidia)
@@ -77,6 +78,7 @@ EOF
 
 # Check if API key is configured
 check_openrouter_config() {
+    [[ "${CP_NO_AI:-0}" != 1 ]] || return 1
     if [[ -z "$OPENROUTER_API_KEY" ]]; then
         log_error "${AI_PROVIDER:-openrouter} API key not configured"
         log_info "Set the selected provider's API key in config.local.conf"
@@ -117,6 +119,7 @@ remove_html_tags() {
 
 # Call OpenRouter API with README content
 invoke_readme_extraction() {
+    [[ "${CP_NO_AI:-0}" != 1 ]] || { log_error "AI calls disabled by CP_NO_AI=1"; return 1; }
     local plain_text="$1"
     local url="${2:-unknown}"
 
@@ -236,6 +239,7 @@ extract_json_from_response() {
 
 # Test OpenRouter connection
 test_openrouter() {
+    [[ "${CP_NO_AI:-0}" != 1 ]] || { log_error "AI calls disabled by CP_NO_AI=1"; return 1; }
     if ! check_openrouter_config; then
         return 1
     fi

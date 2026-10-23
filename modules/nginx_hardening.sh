@@ -767,9 +767,8 @@ run_nginx_hardening() {
 
     # Check if NGINX is installed
     if ! check_nginx_installed; then
-        log_error "NGINX is not installed. Install NGINX first:"
-        log_error "  sudo apt-get install nginx"
-        return 1
+        log_info "NGINX is not installed; skipping NGINX hardening"
+        return 0
     fi
 
     log_info "Starting NGINX hardening process..."

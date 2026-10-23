@@ -1,4 +1,6 @@
 import json
+import io
+from contextlib import redirect_stdout
 import os
 import sys
 import tempfile
@@ -94,6 +96,28 @@ class SentinelTests(unittest.TestCase):
         (self.engine / 'data/readme_parsed.json').write_text(json.dumps({'all_users': [], 'critical_services': ['ssh', 'nginx']}))
         again = self.by_cat(sentinel.scan(FakeCtx(self.engine, self.root)))
         self.assertEqual({f.action[1] for f in again['prohibited-service']}, {'vsftpd'})
+
+    def test_unrecognized_authorized_key_is_reviewed_not_deleted(self):
+        write(self.root, '/home/bob/.ssh/authorized_keys', 'ssh-ed25519 AAAAtest bob@work\n')
+        keys = [f for f in sentinel.scan(self.ctx) if f.category == 'ssh-key']
+        self.assertTrue(keys)
+        self.assertTrue(all(f.mode == 'review' for f in keys))
+
+    def test_once_reports_failed_actions_even_with_full_score(self):
+        with patch.object(sentinel, 'Context', return_value=self.ctx), \
+                patch.object(sentinel, 'apply', return_value=(False, 'fixture failure')), \
+                patch.object(sentinel, 'restore_penalties', return_value=0), \
+                patch.object(sentinel, 'score_line', return_value=(100, 100)), \
+                patch.object(sys, 'argv', ['sentinel.py', '--once']), redirect_stdout(io.StringIO()):
+            self.assertEqual(sentinel.main(), 1)
+
+    def test_once_reports_pending_review(self):
+        with patch.object(sentinel, 'Context', return_value=self.ctx), \
+                patch.object(sentinel, 'apply', return_value=(True, 'fixture success')), \
+                patch.object(sentinel, 'restore_penalties', return_value=0), \
+                patch.object(sentinel, 'score_line', return_value=(96, 100)), \
+                patch.object(sys, 'argv', ['sentinel.py', '--once']), redirect_stdout(io.StringIO()):
+            self.assertEqual(sentinel.main(), 2)
 
     def test_readme_mentioned_tool_and_operator_are_protected(self):
         FakeCtx.packages = ['wireshark', 'nmap']
@@ -265,6 +289,7 @@ class PamAndSshTests(SentinelTests):
         self.assertTrue(all(f.mode == 'auto' for f in cats['pam-backdoor']))
         self.assertEqual([f.mode for f in cats['pam-suspect']], ['review'])
         self.assertEqual(cats['ssh-not-needed'][0].action, ('disable-unit', 'ssh'))
+        self.assertEqual(cats['ssh-not-needed'][0].mode, 'review')
         (self.engine / 'data/readme_parsed.json').write_text(json.dumps({'all_users': [], 'critical_services': ['ssh'], 'recent_hires': []}))
         (self.engine / 'data/auto-source.html').write_text('<p>alice:Pw (YOU)</p><p>SSH is a critical service</p>' + '<p>x</p>' * 80)
         again = self.by_cat(sentinel.scan(FakeCtx(self.engine, self.root)))

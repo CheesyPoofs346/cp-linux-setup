@@ -692,6 +692,8 @@ def _post_with_retry(request, timeout):
 
 
 def call_ai(messages, model=None):
+    if os.environ.get('CP_NO_AI') == '1':
+        raise ValueError('AI calls disabled by CP_NO_AI=1')
     provider = os.environ.get('AI_PROVIDER', 'openrouter')
     endpoint = {'openrouter': 'https://openrouter.ai/api/v1/chat/completions', 'nvidia': 'https://integrate.api.nvidia.com/v1/chat/completions'}.get(provider)
     if not endpoint:

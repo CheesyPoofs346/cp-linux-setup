@@ -86,9 +86,13 @@ peer_approved() {
 run_auto() {
     local source_file="$ENGINE_DIR/data/auto-source.html"
     local report="$ENGINE_DIR/data/auto-results.tsv"
-    local module status reviews=0 failed=0
+    local module status reviews=0 failed=0 any_failed=0
+    if [[ "${CP_NO_AI:-0}" == 1 ]]; then
+        export SKIP_FORENSICS=1 README_AI=never
+    else
     [[ "${AI_PROVIDER:-openrouter}" == nvidia ]] || { log_error "Reviewed auto mode requires NVIDIA configuration; standalone modules still support OpenRouter"; return 2; }
     [[ "${REVIEWER_MODEL:-nvidia/nemotron-3-super-120b-a12b}" != "$OPENROUTER_MODEL" ]] || { log_error "Worker and reviewer must be different models"; return 2; }
+    fi
     export PROTECTED_USER="${PROTECTED_USER:-}"
     check_guard_support || return 1
     umask 077
@@ -185,11 +189,17 @@ run_auto() {
     # Deterministic forensics (no AI, read-only evidence). Always first, before any remediation destroys evidence.
     if [[ "${FORENSICS_DET:-1}" != 0 ]]; then
         log_info "Deterministic forensics solver running..."
-        python3 -I "$ENGINE_DIR/lib/forensics_det.py" 2>&1 | tee -a "$ENGINE_DIR/data/forensics-det.log" || log_warn "Deterministic forensics solver failed; continuing"
+        if python3 -I "$ENGINE_DIR/lib/forensics_det.py" 2>&1 | tee -a "$ENGINE_DIR/data/forensics-det.log"; then
+            printf 'forensics_deterministic\tANSWERS_READY\n' >> "$report"
+        else
+            printf 'forensics_deterministic\tMANUAL_REVIEW\n' >> "$report"
+            log_warn "Forensics unresolved or failed; stopping before remediation to preserve evidence. See data/forensics-det.json."
+            return 2
+        fi
     fi
     # Forensic evidence investigation (can be skipped via Enter or SKIP_FORENSICS=1)
     if [[ "${SKIP_FORENSICS:-0}" == 1 ]]; then
-        log_info "SKIP_FORENSICS=1 active: Skipping forensics and proceeding immediately to remediation..."
+        log_info "AI forensic fallback disabled; deterministic forensic results are saved separately."
         printf 'forensics_questions\tSKIPPED\n' >> "$report"
     else
         status=0
@@ -214,7 +224,7 @@ run_auto() {
             printf 'forensics_questions\tFILLED_UNVERIFIED_SCORE\n' >> "$report"
         fi
     fi
-    log_success "Forensics completed. Proceeding immediately to system remediation..."
+    log_info "Forensic pass finished; check data/forensics-det.json for unanswered questions. Proceeding to remediation."
     check_main_account || return 1
     # Broad package file reads happen only after forensic answers are collected.
     log_info "Running system anomaly audit and baseline checks..."
@@ -273,6 +283,7 @@ run_auto() {
             return 1
         fi
         if (( failed )); then
+            any_failed=1
             if [[ "${AUTO_REMEDIATE:-0}" == 1 ]]; then
                 log_warn "Module $module encountered issues; continuing with remaining modules under AUTO_REMEDIATE=1"
                 failed=0
@@ -287,13 +298,23 @@ run_auto() {
         python3 "$ENGINE_DIR/lib/score_tracker.py" --once || true
         repair_operator_aging
         # Keep working until clean: auto-fix the sure things, ask about the suspicious ones. Ctrl-C stops it.
-        if [[ "${SENTINEL:-1}" == 1 && -t 0 ]]; then
-            python3 "$ENGINE_DIR/lib/sentinel.py" || true
+        if [[ "${SENTINEL:-1}" == 1 ]]; then
+            local sentinel_status=0
+            if [[ -t 0 ]]; then
+                python3 "$ENGINE_DIR/lib/sentinel.py" || sentinel_status=$?
+            else
+                python3 "$ENGINE_DIR/lib/sentinel.py" --once || sentinel_status=$?
+            fi
+            case "$sentinel_status" in
+                0) printf 'sentinel\tPASS\n' >> "$report" ;;
+                2) printf 'sentinel\tMANUAL_REVIEW\n' >> "$report"; reviews=$((reviews + 1)) ;;
+                *) printf 'sentinel\tFAILED\n' >> "$report"; any_failed=1 ;;
+            esac
             repair_operator_aging
         fi
     fi
     log_warn "Module status is not an image score. Check forensics, README-specific requirements, required services, and the official scoring report."
-    (( failed == 0 )) || return 1
+    (( failed == 0 && any_failed == 0 )) || return 1
     # A review-needed run must not look like complete success to callers.
     (( reviews == 0 )) || return 2
 }
@@ -312,11 +333,8 @@ run_worker_module() {
     [[ "${CP_AUTO:-0}" == 1 ]] || { log_error "Worker entry is internal to --auto"; return 1; }
     source "$ENGINE_DIR/modules/readme_parser.sh"
     python3 "$ENGINE_DIR/lib/validate_readme.py" "$ENGINE_DIR/data/auto-source.html" "$ENGINE_DIR/data/readme_parsed.json" || {
-        if [[ "${AUTO_REMEDIATE:-0}" == 1 ]]; then
-            log_warn "README validation reported warnings; continuing under AUTO_REMEDIATE=1"
-        else
-            return 1
-        fi
+        log_error "README validation failed; remediation stopped"
+        return 1
     }
     README_DATA=$(cat "$ENGINE_DIR/data/readme_parsed.json")
     README_PARSED=1

@@ -5,6 +5,7 @@ TEST_DIR=$(mktemp -d)
 trap '[[ -n "$TEST_DIR" && -d "$TEST_DIR" ]] && rm -rf -- "$TEST_DIR"' EXIT
 source "$ROOT/lib/openrouter.sh"
 source "$ROOT/lib/automation.sh"
+export FORENSICS_DET=0
 
 # Mock only the HTTP boundary. jq and the response handling are real.
 OPENROUTER_API_KEY=dummy
@@ -67,3 +68,34 @@ run_auto || status=$?
 [[ "$status" == 2 && "$(wc -l < "$TEST_DIR/reviewer-block-executed")" == 1 ]]
 grep -q $'peer_review\tMANUAL_REVIEW' "$ENGINE_DIR/data/auto-results.tsv"
 echo 'PASS: API reasoning-only success/error, NVIDIA routing, failed preflight, review status, timeout stops remaining modules'
+
+# Unattended runs may continue after a module failure, but must return failure.
+export CP_NO_AI=1 AUTO_REMEDIATE=1 SKIP_FORENSICS=1 SENTINEL=0
+MODULES=(readme_parser local_policy security_policy)
+review_auto_plan() { return 0; }
+quiesce_apt() { return 0; }
+clear_immutable_flags() { return 0; }
+repair_package_state() { return 0; }
+repair_operator_aging() { return 0; }
+python3() { return 0; }
+timeout() { [[ "${@: -1}" != local_policy ]]; }
+status=0
+run_auto || status=$?
+[[ "$status" == 1 ]] || { echo "FAIL: unattended module failure returned $status"; exit 1; }
+grep -q $'security_policy\tPASS' "$ENGINE_DIR/data/auto-results.tsv"
+echo 'PASS: unattended execution continues but preserves failure status'
+
+export SENTINEL=1
+python3() { printf '%s\n' "$*" >> "$TEST_DIR/python-calls"; return 0; }
+timeout() { return 0; }
+run_auto </dev/null
+grep -q 'sentinel.py --once' "$TEST_DIR/python-calls" || { echo 'FAIL: noninteractive run skipped sentinel'; exit 1; }
+echo 'PASS: noninteractive run executes one deterministic sentinel pass'
+
+export FORENSICS_DET=1
+python3() { [[ "$*" != *forensics_det.py* ]] || return 2; return 0; }
+timeout() { touch "$TEST_DIR/cleanup-after-unsolved"; }
+status=0
+run_auto </dev/null || status=$?
+[[ "$status" == 2 && ! -e "$TEST_DIR/cleanup-after-unsolved" ]] || { echo 'FAIL: unresolved forensics allowed cleanup'; exit 1; }
+echo 'PASS: unresolved forensics pauses before evidence-changing modules'

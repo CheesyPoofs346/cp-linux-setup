@@ -334,11 +334,11 @@ def scan(ctx):
             add('prohibited-service', f'{unit} is running/enabled and not a README critical service', ('disable-unit', unit),
                 'auto' if unit.split('.')[0] in AUTO_STOP_SERVICES else 'review')
 
-    # --- auto: SSH when the README never mentions it (CP scores "OpenSSH service is disabled or removed")
+    # --- review: README silence does not prove SSH is unauthorized
     if ctx.readme_text and len(ctx.readme_text) > 200 and not ctx.readme_has('ssh'):
         for unit in ('ssh', 'sshd', 'ssh.socket'):
             if _unit_on(ctx, unit):
-                add('ssh-not-needed', f'{unit} is running but the README never mentions SSH', ('disable-unit', unit), 'auto')
+                add('ssh-not-needed', f'{unit} is running but the README never mentions SSH', ('disable-unit', unit), 'review')
 
     # --- auto: PAM rules that skip authentication (backdoors); review: sufficient pam_succeed_if
     for n in sorted(_listdir(ctx.p('/etc/pam.d'))):
@@ -395,7 +395,7 @@ def scan(ctx):
             for k in keys:
                 if u['name'].lower() in ctx.protected and u['name'] != 'root' and _key_known(ctx, k):
                     continue
-                add('ssh-key', f"{u['name']} authorized key: {k[:60]}...", ('del-line', f"{u['home']}/.ssh/authorized_keys", k), 'auto')
+                add('ssh-key', f"{u['name']} authorized key: {k[:60]}...", ('del-line', f"{u['home']}/.ssh/authorized_keys", k), 'review')
             home = ctx.p(u['home'])
             for pattern in ('Desktop', 'Documents', 'Downloads', 'Music', 'Videos', 'Pictures'):
                 base = home / pattern
@@ -665,8 +665,8 @@ def apply(ctx, finding):
         if kind == 'gpasswd-del':
             return run(['gpasswd', '-d', act[1], act[2]]).returncode == 0, f'removed {act[1]} from {act[2]}'
         if kind == 'disable-unit':
-            run(['systemctl', 'disable', '--now', act[1]])
-            return True, f'disabled {act[1]}'
+            ok = run(['systemctl', 'disable', '--now', act[1]]).returncode == 0
+            return ok, f'disabled {act[1]}' if ok else f'could not disable {act[1]}'
         if kind == 'snap-remove':
             return run(['snap', 'remove', '--purge', act[1]]).returncode == 0, f'removed snap {act[1]}'
         if kind == 'kill':
@@ -762,6 +762,9 @@ def penalty_actions(report_html):
         negative = re.search(r'[-−]\d+\s*(pts?|points?)\b', line, re.I) or re.search(r'penalt', line, re.I) and re.search(r'\d', line)
         if not line or not negative or not PENALTY_LINE.search(line) or len(line) > 220:
             continue
+        # Security settings mentioning SSH are not service availability penalties.
+        if re.search(r'root login|x11|forwarding|authentication|password|hostbased|rhosts', line, re.I):
+            continue
         for pattern, pkg, unit in PENALTY_SUBJECTS:
             if re.search(pattern, line, re.I):
                 if pkg not in seen:
@@ -794,9 +797,14 @@ def restore_penalties(ctx, log=print):
                 if r.returncode == 0:
                     break
             else:
+                ctx.failed_actions = getattr(ctx, 'failed_actions', 0) + 1
+                log(f'  [penalty] could not reinstall {pkg}')
                 continue
         if unit:
-            run(['systemctl', 'enable', '--now', unit], timeout=60)
+            if run(['systemctl', 'enable', '--now', unit], timeout=60).returncode != 0:
+                ctx.failed_actions = getattr(ctx, 'failed_actions', 0) + 1
+                log(f'  [penalty] could not enable/start {unit}')
+                continue
         log(f'  [penalty] {line[:90]} -> restored {pkg}{" + " + unit if unit else ""}')
         record_fix(ctx, f'penalty: restored {pkg}')
         fixed += 1
@@ -936,11 +944,13 @@ def one_pass(ctx, state, auto_only=False, ask_mode=False, log=print):
     redate_accounts(ctx)
     findings = scan(ctx)
     new_auto = [f for f in findings if f.mode == 'auto' and state.get(f.key) != 'done' and _failures(state, f.key) < MAX_RETRIES]
+    succeeded = 0
     for f in new_auto:
         ok, msg = apply(ctx, f)
         state[f.key] = 'done' if ok else f'failed:{_failures(state, f.key) + 1}'
         log(f"  [auto] {'fixed' if ok else 'FAILED'}: {f.text} -> {msg}")
         if ok:
+            succeeded += 1
             record_fix(ctx, f'{f.category}: {f.text}')
     review = [f for f in findings if f.mode == 'review' and state.get(f.key) not in ('kept', 'done')]
     fresh = [f for f in review if f.key not in state]
@@ -970,7 +980,9 @@ def one_pass(ctx, state, auto_only=False, ask_mode=False, log=print):
         save_pending(ctx, [])
     if new_auto and not review and not auto_only:
         save_pending(ctx, [])
-    return len(new_auto), len(fresh)
+    ctx.failed_actions = sum(f.mode == 'auto' and _failures(state, f.key) > 0 for f in findings)
+    ctx.pending_review = len(review)
+    return succeeded, len(fresh)
 
 
 def main():
@@ -1000,22 +1012,22 @@ def main():
         score, max_score = score_line(engine_dir)
         if score is not None:
             delta = '' if last_score is None else f' ({score - last_score:+d})'
-            print(f'  Score: {score}/{max_score}{delta}', flush=True)
-            if score >= max_score > 0:
+            print(f'  Reported score: {score}/{max_score}{delta} (may lag recent fixes)', flush=True)
+            if score >= max_score > 0 and not ctx.failed_actions and not ctx.pending_review:
                 print('  FULL POINTS - sentinel done.', flush=True)
                 return 0
             stalled = stalled + 1 if score == last_score and not fixed else 0
             last_score = score
             if not args.once and stalled in (6, 30, 90):
-                # Points stopped moving: let the score optimizer (AI + targeted passes) look at the report again.
-                print('  Score stalled; running the score optimizer for new ideas...', flush=True)
+                # Re-read the report without speculative system changes.
+                print('  Score stalled; refreshing the score report (no speculative changes)...', flush=True)
                 try:
                     run([sys.executable, str(Path(__file__).resolve().parent / 'score_tracker.py')], timeout=900)
                 except (OSError, subprocess.SubprocessError):
                     pass
         quiet = quiet + 1 if not fixed and not pending else 0
         if args.once:
-            return 0
+            return 1 if ctx.failed_actions else 2 if ctx.pending_review else 0
         if quiet >= 3:
             print('  Nothing new for 3 passes; still watching every %ds (Ctrl-C to stop).' % args.interval, flush=True)
             quiet = 0

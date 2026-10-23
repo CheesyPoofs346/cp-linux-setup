@@ -58,6 +58,7 @@ def find_scoring_report():
         '/root/Desktop/*[Ss]core*.html',
         '/opt/CyberPatriot/*[Ss]coring*.html',
         '/opt/cyberpatriot/*[Ss]coring*.html',
+        '/opt/engine/ScoringReport.html',
         '/opt/aeacus/*[Ss]coring*.html',
         '/opt/aeacus/assets/*[Ss]coring*.html',
         '/var/log/cyberpatriot/*[Ss]core*.html',
@@ -483,69 +484,20 @@ def repair_protected_aging(engine_dir):
 
 
 def main():
-    engine_dir = Path(__file__).resolve().parents[1]
-    import atexit
-    atexit.register(repair_protected_aging, engine_dir)
-    restore_scoring_service()
-    if '--once' in sys.argv:  # single deterministic pass; the sentinel handles the keep-working loop (no AI)
-        apply_targeted_hardening(engine_dir)
+    """Observe score only; modules and sentinel own validated remediation."""
+    report = find_scoring_report()
+    if report is None:
+        print('Score Tracker: report unavailable; no system changes made.', flush=True)
         return 0
-
-    report_path = find_scoring_report()
-    if not report_path:
-        print("Score Tracker: ScoringReport.html not located yet. Waiting 10s...", flush=True)
-        time.sleep(10)
-        report_path = find_scoring_report()
-
-    if not report_path:
-        print("Score Tracker: Could not find ScoringReport.html. Running targeted hardening...", flush=True)
-        apply_targeted_hardening(engine_dir)
-        return 0
-
-    print(f"Score Tracker: Detected scoring report at {report_path}", flush=True)
-
-    max_cycles = 5
-    for cycle in range(1, max_cycles + 1):
-        html = report_path.read_text(encoding='utf-8', errors='ignore')
-        info = parse_scoring_report(html)
-
-        valid_score = (
-            info['score'] is not None and
-            info['max_score'] is not None and
-            40 <= info['max_score'] <= 200 and
-            0 <= info['score'] <= info['max_score']
-        )
-
-        if valid_score:
-            pct = int((info['score'] / info['max_score']) * 100) if info['max_score'] > 0 else 0
-            print(f"\n==================================================", flush=True)
-            print(f"  CyberPatriot Score: {info['score']} / {info['max_score']} points ({pct}%)", flush=True)
-            print(f"  Scored Vulnerabilities: {info['num_vulns']}", flush=True)
-            print(f"==================================================", flush=True)
-
-            if info['score'] >= info['max_score'] and info['score'] > 0:
-                print("\n[SUCCESS] 100% ACHIEVED! ALL VULNERABILITIES RESOLVED!\n", flush=True)
-                return 0
-
-            print(f"\nScore Optimizer: Cycle {cycle}/{max_cycles} to reach 100%...", flush=True)
-            apply_targeted_hardening(engine_dir)
-
-            if cycle >= 2:
-                query_ai_optimizer(info, engine_dir)
-
-            print("Score Optimizer: Waiting 15s for scoring daemon to update...", flush=True)
-            time.sleep(15)
-        else:
-            print(f"Score Tracker: Cycle {cycle}/{max_cycles} - Report found, applying hardening pass...", flush=True)
-            apply_targeted_hardening(engine_dir)
-            time.sleep(12)
-
-    # Final check
-    final_html = report_path.read_text(encoding='utf-8', errors='ignore')
-    final_info = parse_scoring_report(final_html)
-    if final_info['score'] is not None and final_info['max_score'] is not None and 40 <= final_info['max_score'] <= 200:
-        print(f"\nFinal CyberPatriot Score: {final_info['score']} / {final_info['max_score']} points.", flush=True)
-
+    try:
+        info = parse_scoring_report(report.read_text(encoding='utf-8', errors='ignore'))
+    except OSError as error:
+        print(f'Score Tracker: cannot read report: {error}', flush=True)
+        return 1
+    if info['score'] is None or info['max_score'] is None:
+        print('Score Tracker: report has no recognized score; no system changes made.', flush=True)
+    else:
+        print(f"Score Tracker: {info['score']}/{info['max_score']} (reported score, not a complete security audit)", flush=True)
     return 0
 
 

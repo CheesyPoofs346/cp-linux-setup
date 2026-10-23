@@ -2,6 +2,7 @@ import importlib.util
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 spec = importlib.util.spec_from_file_location('det', Path(__file__).resolve().parents[1] / 'lib/forensics_det.py')
@@ -60,6 +61,57 @@ class DetTests(unittest.TestCase):
 
     def test_unrelated_question_returns_none(self):
         self.assertIsNone(det.solve(question('What is the airspeed velocity of an unladen swallow?'), self.ev()))
+
+    def test_music_question_does_not_count_unrelated_documents(self):
+        (self.root / 'home/ben/Music/song.mp3').write_bytes(b'x')
+        for n in range(4):
+            (self.root / f'home/ben/Documents/n{n}.pdf').write_bytes(b'x')
+        result = det.solve(question('Which directory contains the music files?'), self.ev())
+        self.assertEqual(result['answers'], ['/home/ben/Music'])
+
+    def test_uid_zero_account_is_solved_from_passwd(self):
+        with (self.root / 'etc/passwd').open('a') as out:
+            out.write('intruder:x:0:0::/root:/bin/bash\n')
+        result = det.solve(question('Which unauthorized user has UID 0?'), self.ev())
+        self.assertIsNotNone(result)
+        self.assertEqual(result['answers'], ['intruder'])
+        self.assertEqual(result['confidence'], 'high')
+
+    def test_multiple_uid_zero_candidates_are_not_guessed(self):
+        with (self.root / 'etc/passwd').open('a') as out:
+            out.write('one:x:0:0::/root:/bin/bash\ntwo:x:0:0::/root:/bin/bash\n')
+        self.assertIsNone(det.solve(question('Which unauthorized user has UID 0?'), self.ev()))
+
+    def test_base64_question_uses_named_file(self):
+        (self.root / 'home/ben/Documents/target.txt').write_text('c2VjcmV0IG1lc3NhZ2U=')
+        (self.root / 'home/ben/Documents/other.txt').write_text('d3JvbmcgbWVzc2FnZQ==')
+        result = det.solve(question('Decode the base64 message in /home/ben/Documents/target.txt.'), self.ev())
+        self.assertEqual(result['answers'], ['secret message'])
+        self.assertEqual(result['confidence'], 'high')
+
+    def test_ambiguous_answer_is_not_written_by_default(self):
+        desktop = self.root / 'home/ben/Desktop'
+        desktop.mkdir()
+        target = desktop / 'Forensics_Question_1.txt'
+        original = question('Which directory contains the music?')['content']
+        target.write_text(original)
+        with patch.object(det, 'solve', return_value={'answers': ['/guess'], 'confidence': 'medium', 'why': 'ambiguous'}):
+            result = det.run([desktop], root=str(self.root))
+        self.assertEqual(target.read_text(), original)
+        self.assertEqual(result[0]['status'], 'unsolved')
+
+    def test_persistent_backups_allow_a_reset_question_to_be_answered_again(self):
+        desktop = self.root / 'home/ben/Desktop'
+        desktop.mkdir()
+        target = desktop / 'Forensics_Question_1.txt'
+        original = question('What is the answer?')['content']
+        backups = self.root / 'backups'
+        with patch.object(det, 'solve', return_value={'answers': ['verified'], 'confidence': 'high', 'why': 'fixture'}):
+            for _ in range(2):
+                target.write_text(original)
+                result = det.run([desktop], root=str(self.root), backup_dir=backups)
+                self.assertEqual(result[0]['status'], 'applied')
+        self.assertEqual(len(list(backups.rglob('*.original'))), 2)
 
 
 if __name__ == '__main__':

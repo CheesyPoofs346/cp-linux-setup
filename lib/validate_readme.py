@@ -71,7 +71,33 @@ def extract_text_sections(text):
     return sections
 
 
+def validate_deterministic(html, data):
+    """Check schema and source-derived actions without a model or permissive fallback."""
+    from readme_extract import extract
+    expected = extract(html)
+    if expected['unparsed_hints']:
+        raise ValueError('Unsupported README instructions: ' + ', '.join(expected['unparsed_hints']))
+    users = expected['all_users']
+    if not users or not any(u['account_type'] == 'admin' for u in users):
+        raise ValueError('No authorized administrator/user lists recognized')
+    if not isinstance(data, dict):
+        raise ValueError('Parsed README must be an object')
+    for field in ('all_users', 'recent_hires', 'terminated_users', 'critical_services', 'groups_to_create', 'system_users_to_restrict'):
+        actual = data.get(field)
+        if not isinstance(actual, list):
+            raise ValueError('Missing or invalid array: ' + field)
+        canonical = lambda items: sorted(json.dumps(item, sort_keys=True) for item in items)
+        if canonical(actual) != canonical(expected[field]):
+            raise ValueError('Parsed ' + field + ' disagrees with source README')
+    for user in users + expected['recent_hires']:
+        if not re.fullmatch(r'[a-z_][a-z0-9_-]*\$?', user['name']):
+            raise ValueError('Invalid account name')
+    return len(users)
+
+
 def validate(html, data):
+    if os.environ.get('CP_NO_AI') == '1':
+        return validate_deterministic(html, data)
     auto_rem = os.environ.get('AUTO_REMEDIATE') == '1'
     parser = Sections()
     parser.feed(html)
@@ -174,8 +200,5 @@ if __name__ == '__main__':
         count = validate(Path(sys.argv[1]).read_text(encoding='utf-8', errors='replace'), json.loads(Path(sys.argv[2]).read_text(encoding='utf-8', errors='replace')))
         print(f'Validated {count} authorized users, roles, and required services against source HTML')
     except (ValueError, OSError, IndexError, TypeError) as exc:
-        if os.environ.get('AUTO_REMEDIATE') == '1':
-            print(f'WARNING: README validation: {exc} (proceeding under AUTO_REMEDIATE=1)', file=sys.stderr)
-            sys.exit(0)
         print('README validation failed: ' + str(exc), file=sys.stderr)
         sys.exit(1)

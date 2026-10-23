@@ -154,7 +154,7 @@ def extract(html):
         if pw_line and last_user and kind in ('admin', 'standard'):
             passwords[last_user] = pw_line[1]
             continue
-        if kind in ('admin', 'standard') and len(line.split()) >= 8 and line.rstrip().endswith('.') and not line.startswith(('-', '*', '•')):
+        if kind in ('admin', 'standard') and line.rstrip().endswith('.') and not line.startswith(('-', '*', '•')) and (len(line.split()) >= 8 or re.search(r'\b(is|are|must|should|requires?|needs?)\b', line, re.I)):
             kind = None   # a full sentence ends the list
             continue
         if re.match(r'^(forensics|competition|important|scoring|scenario|unique identifier|this is|the .* (policy|computer))', line, re.I) \

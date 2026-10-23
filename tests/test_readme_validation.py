@@ -2,6 +2,12 @@ import copy
 import importlib.util
 from pathlib import Path
 import unittest
+import json
+import os
+import subprocess
+import tempfile
+import sys
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('guard', Path(__file__).resolve().parents[1] / 'lib/validate_readme.py')
 guard = importlib.util.module_from_spec(spec)
@@ -12,6 +18,26 @@ DATA = {'all_users': [{'name': name, 'account_type': role, 'groups': []} for nam
 
 
 class ValidationTests(unittest.TestCase):
+    def test_cli_cannot_bypass_invalid_data_with_auto_remediate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / 'readme.html'
+            parsed = Path(tmp) / 'parsed.json'
+            source.write_text(HTML)
+            parsed.write_text('{}')
+            result = subprocess.run([sys.executable, str(Path(guard.__file__)), str(source), str(parsed)],
+                                    env=dict(os.environ, AUTO_REMEDIATE='1'), capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+
+    def test_no_ai_accepts_prose_but_rejects_unbacked_actions(self):
+        from readme_extract import extract
+        html = '<h2>Accounts</h2><pre>Authorized Administrators:\noperator\npassword: secret\nAuthorized Users:\nmember\n</pre><p>OpenSSH is a critical service.</p><p>member is no longer an administrator but should still have an account.</p>'
+        data = extract(html)
+        with patch.dict(os.environ, {'CP_NO_AI': '1', 'AUTO_REMEDIATE': '1'}):
+            self.assertEqual(guard.validate(html, data), 2)
+            data['terminated_users'] = ['operator']
+            with self.assertRaises(ValueError):
+                guard.validate(html, data)
+
     def test_complete(self):
         self.assertEqual(guard.validate(HTML, DATA), 3)
 

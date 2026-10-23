@@ -123,6 +123,7 @@ fi
 if [[ -f "$ENGINE_DIR/config.local.conf" ]]; then
     source "$ENGINE_DIR/config.local.conf"
 fi
+export CP_NO_AI="${CP_NO_AI:-1}"
 configure_ai
 source "$ENGINE_DIR/lib/automation.sh"
 

@@ -545,6 +545,10 @@ display_summary() {
 run_php_hardening() {
     log_info "Starting PHP Hardening module..."
 
+    if ! detect_php_versions >/dev/null; then
+        log_info "PHP is not installed; skipping PHP hardening"
+        return 0
+    fi
     # Execute hardening steps
     apply_php_hardening || {
         log_error "PHP hardening failed - no PHP installations found"

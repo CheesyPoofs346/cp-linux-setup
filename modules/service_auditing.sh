@@ -191,10 +191,43 @@ start_enable_service() {
     return $changed
 }
 
-# Stop and disable a service
+canonical_service() {
+    local name="${1,,}"
+    name=${name%.service}
+    case "$name" in
+        avahi|avahi-daemon) name=avahi-daemon ;;
+        snmp|snmpd) name=snmpd ;;
+        ssh|sshd|openssh|openssh-server) name=ssh ;;
+        apache|apache2|httpd) name=apache2 ;;
+        mariadb|mysql) name=mysql ;;
+        samba|smb|smbd) name=smbd ;;
+        nfs|nfs-server|nfs-kernel-server) name=nfs-server ;;
+    esac
+    printf '%s\n' "$name"
+}
+
+# Stop and disable a service, preserving README requirements and known aliases.
 stop_disable_service() {
     local service="$1"
     local reason="${2:-No reason provided}"
+    local required required_unit service_unit
+    service_unit=$(canonical_service "$service")
+    if ! required=$(get_critical_services 2>/dev/null); then
+        log_warn "Cannot verify required services; refusing to disable $service"
+        return 1
+    fi
+    while IFS= read -r required_unit; do
+        required_unit=$(canonical_service "$required_unit")
+        if [[ "$required_unit" == "$service_unit" ]]; then
+            log_info "Preserving README-required service: $service"
+            return 0
+        fi
+        case "$required_unit:$service_unit" in
+            nfs*:rpcbind|nfs*:rpc-statd|nfs*:rpc-statd-notify|nfs*:nfs-common|nfs*:nfs-server|nfs*:nfs-kernel-server|cups:cups-browsed)
+                log_info "Preserving dependency of $required_unit: $service"
+                return 0 ;;
+        esac
+    done <<< "$required"
 
     if ! service_exists "$service"; then
         log_debug "Service $service does not exist (already removed or never installed)"
@@ -473,6 +506,10 @@ run_service_auditing() {
         critical_services="none"
     fi
 
+    if [[ "${CP_NO_AI:-0}" == 1 ]]; then
+        log_info "Deterministic service audit complete; Sentinel handles additional findings without AI"
+        return 0
+    fi
     # Get service recommendations
     log_info "Requesting service analysis..."
     local recommendations=$(get_service_recommendations "$running_services" "$critical_services")

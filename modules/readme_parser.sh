@@ -136,11 +136,14 @@ parse_readme() {
     python3 "$SCRIPT_DIR/../lib/readme_extract.py" "$readme_path" "$det_file" >/dev/null 2>&1 && have_det=1
     local det_hints=""
     (( have_det )) && det_hints=$(jq -r '.unparsed_hints | join("")' "$det_file")
-    if (( have_det )) && [[ -z "$det_hints" && "${README_AI:-auto}" != always ]]; then
+    if (( have_det )) && [[ "${CP_NO_AI:-0}" == 1 || "${README_AI:-auto}" == never ]]; then
+        log_info "Using deterministic README parsing (AI disabled)"
+        json_data=$(jq 'del(.passwords, .unparsed_hints)' "$det_file")
+    elif (( have_det )) && [[ -z "$det_hints" && "${README_AI:-auto}" != always ]]; then
         # A cleanly structured README needs no model: users, admins and services come straight from its lists.
         log_info "README parsed directly from its Authorized Users/Administrators/Services lists (AI skipped)"
         json_data=$(jq 'del(.passwords, .unparsed_hints)' "$det_file")
-    elif [[ -n "${OPENROUTER_API_KEY:-}" ]] && log_info "Asking AI to read the README (short timeout; falls back to the parsed lists)..." \
+    elif [[ "${CP_NO_AI:-0}" != 1 && "${README_AI:-auto}" != never && -n "${OPENROUTER_API_KEY:-}" ]] && log_info "Asking AI to read the README (short timeout; falls back to the parsed lists)..." \
             && ai_response=$(AI_TIMEOUT_SECONDS=45 AI_HTTP_RETRIES=2 invoke_readme_extraction "$plain_text" "$readme_path"); then
         echo "$ai_response" > "$SCRIPT_DIR/../data/readme_ai_response.txt"
         if ai_json=$(extract_json_from_response "$ai_response") && jq -e '.all_users' <<<"$ai_json" >/dev/null 2>&1; then
@@ -181,12 +184,9 @@ parse_readme() {
     validation_file=$(mktemp)
     printf '%s\n' "$json_data" > "$validation_file"
     if ! python3 "$SCRIPT_DIR/../lib/validate_readme.py" "$readme_path" "$validation_file"; then
-        if [[ "${AUTO_REMEDIATE:-0}" == 1 ]]; then
-            log_warn "README validation reported warnings; continuing with AI extraction under AUTO_REMEDIATE=1"
-        else
-            rm -f -- "$validation_file"
-            return 1
-        fi
+        log_error "README validation failed; remediation stopped"
+        rm -f -- "$validation_file"
+        return 1
     fi
     rm -f -- "$validation_file"
     README_SOURCE="$readme_path"
