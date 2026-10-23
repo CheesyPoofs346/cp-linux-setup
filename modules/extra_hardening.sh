@@ -187,6 +187,16 @@ lock-delay=uint32 0
 
 [org/cinnamon/desktop/session]
 idle-delay=uint32 300
+
+[org/cinnamon/desktop/media-handling]
+automount=false
+automount-open=false
+autorun-never=true
+
+[org/gnome/desktop/media-handling]
+automount=false
+automount-open=false
+autorun-never=true
 DCONF
     [[ -f "$prof" ]] || printf 'user-db:user\nsystem-db:local\n' > "$prof"
     grep -q 'system-db:local' "$prof" || echo 'system-db:local' >> "$prof"
@@ -351,6 +361,25 @@ extra_web_direct() {
     return 0
 }
 
+# FTP root directories must not be world-writable (anonymous upload = scored vuln); vsftpd also wants TLS.
+extra_ftp_root() {
+    local d conf=/etc/vsftpd.conf roots=(/srv/ftp /var/ftp /home/ftp /srv/ftp/pub)
+    if [[ -f "$conf" ]]; then
+        local r
+        while IFS= read -r r; do [[ -n "$r" ]] && roots+=("$r"); done < <(grep -Eh '^[[:space:]]*(anon_root|local_root)[[:space:]]*=' "$conf" | cut -d= -f2 | tr -d ' ')
+    fi
+    for d in "${roots[@]}"; do
+        [[ -d "$d" && ! -L "$d" ]] || continue
+        if [[ "$(stat -c '%a' "$d")" =~ [2367]$ ]]; then
+            chmod o-w "$d" && extra_fixed "FTP root no longer world-writable: $d"
+        fi
+        if [[ "$d" == /srv/ftp || "$d" == /var/ftp || "$d" == /home/ftp ]] && [[ "$(stat -c '%a' "$d")" =~ ^[0-7][2367][0-7]$ ]]; then
+            chmod g-w "$d" 2>/dev/null || true
+        fi
+    done
+    return 0
+}
+
 run_extra_hardening() {
     log_section "Extra Hardening (deterministic checklist)"
     extra_host_conf
@@ -367,6 +396,7 @@ run_extra_hardening() {
     extra_screen_lock
     extra_firefox_policy
     extra_mail_dns
+    extra_ftp_root
     extra_web_direct
     extra_update_settings
     extra_shell_profile

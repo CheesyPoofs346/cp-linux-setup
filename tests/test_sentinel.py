@@ -33,6 +33,9 @@ def write(root, rel, text):
 
 class SentinelTests(unittest.TestCase):
     def setUp(self):
+        guard = patch.object(sentinel, '_purge_collateral', return_value='')
+        guard.start()
+        self.addCleanup(guard.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name) / 'root'
@@ -87,7 +90,7 @@ class SentinelTests(unittest.TestCase):
         cats = self.by_cat(sentinel.scan(self.ctx))
         self.assertEqual([(f.action[1], f.mode) for f in cats['service-off']], [('avahi-daemon', 'auto')])
         self.assertEqual({f.action[1] for f in cats['prohibited-service']}, {'vsftpd', 'nginx'})
-        self.assertEqual({f.action[1]: f.mode for f in cats['prohibited-service']}, {'vsftpd': 'auto', 'nginx': 'review'})
+        self.assertEqual({f.action[1]: f.mode for f in cats['prohibited-service']}, {'vsftpd': 'auto', 'nginx': 'auto'})
         (self.engine / 'data/readme_parsed.json').write_text(json.dumps({'all_users': [], 'critical_services': ['ssh', 'nginx']}))
         again = self.by_cat(sentinel.scan(FakeCtx(self.engine, self.root)))
         self.assertEqual({f.action[1] for f in again['prohibited-service']}, {'vsftpd'})
@@ -245,3 +248,38 @@ class PrivilegeTests(SentinelTests):
         self.assertTrue(any('carol ALL' in g for g in grants) and any('%ops' in g for g in grants))
         self.assertFalse(any('alice ALL' in g for g in grants))
         self.assertEqual(cats['hacking-snap'][0].action, ('snap-remove', 'john-the-ripper'))
+
+
+class PamAndSshTests(SentinelTests):
+    def test_pam_backdoors_and_ssh_when_readme_silent(self):
+        write(self.root, '/etc/pam.d/sudo', 'auth sufficient pam_permit.so\n@include common-auth\n')
+        write(self.root, '/etc/pam.d/su', 'auth sufficient pam_rootok.so\nauth sufficient pam_wheel.so trust\n')
+        write(self.root, '/etc/pam.d/common-auth', 'auth\t[success=1 default=ignore]\tpam_unix.so nullok\nauth\trequisite\tpam_deny.so\nauth\trequired\tpam_permit.so\n')
+        write(self.root, '/etc/pam.d/login', 'auth sufficient pam_succeed_if.so user = eve\n')
+        (self.engine / 'data/readme_parsed.json').write_text(json.dumps({'all_users': [{'name': 'alice', 'account_type': 'admin'}], 'critical_services': ['apache2'], 'recent_hires': []}))
+        (self.engine / 'data/auto-source.html').write_text('<p>alice:Pw (YOU)</p>' + '<p>Company web server notes. </p>' * 12)
+        ctx = FakeCtx(self.engine, self.root)
+        cats = self.by_cat(sentinel.scan(ctx))
+        self.assertEqual(sorted(f.text.split(': ', 1)[1] for f in cats['pam-backdoor']),
+                         ['auth sufficient pam_permit.so', 'auth sufficient pam_wheel.so trust'])
+        self.assertTrue(all(f.mode == 'auto' for f in cats['pam-backdoor']))
+        self.assertEqual([f.mode for f in cats['pam-suspect']], ['review'])
+        self.assertEqual(cats['ssh-not-needed'][0].action, ('disable-unit', 'ssh'))
+        (self.engine / 'data/readme_parsed.json').write_text(json.dumps({'all_users': [], 'critical_services': ['ssh'], 'recent_hires': []}))
+        (self.engine / 'data/auto-source.html').write_text('<p>alice:Pw (YOU)</p><p>SSH is a critical service</p>' + '<p>x</p>' * 80)
+        again = self.by_cat(sentinel.scan(FakeCtx(self.engine, self.root)))
+        self.assertNotIn('ssh-not-needed', again)
+
+
+class PurgeGuardTests(unittest.TestCase):
+    def fake(self, remv):
+        out = ''.join(f'Remv {p} [1.0]\n' for p in remv)
+        return patch.object(sentinel.subprocess, 'run', return_value=type('R', (), {'stdout': out, 'stderr': '', 'returncode': 0})())
+
+    def test_blocks_desktop_collateral_and_mass_removals(self):
+        with self.fake(['gnome-games', 'ubuntu-desktop', 'mint-meta-cinnamon']):
+            self.assertIn('ubuntu-desktop', sentinel._purge_collateral('gnome-games'))
+        with self.fake(['john'] + [f'lib{i}' for i in range(30)]):
+            self.assertIn('packages', sentinel._purge_collateral('john'))
+        with self.fake(['john', 'john-data']):
+            self.assertEqual(sentinel._purge_collateral('john'), '')

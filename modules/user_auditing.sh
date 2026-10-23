@@ -1211,7 +1211,7 @@ rotate_authorized_passwords() {
     log_section "Rotating Passwords of Authorized Accounts"
     [[ "${ROTATE_PASSWORDS:-1}" == 1 ]] || return 0
     command_exists jq || return 0
-    local main_user protected state u hash count=0
+    local main_user protected state u hash expired count=0
     main_user=$(get_main_user)
     protected="${PROTECTED_USER:-$main_user}"
     state="$SCRIPT_DIR/../data/pw_rotated.txt"
@@ -1222,7 +1222,10 @@ rotate_authorized_passwords() {
         grep -qxF "$u" "$state" && continue
         hash=$(getent shadow "$u" | cut -d: -f2)
         [[ -z "$hash" || "$hash" == '!'* || "$hash" == '*'* ]] && continue
+        expired=0
+        [[ "$(getent shadow "$u" | cut -d: -f3)" == 0 ]] && expired=1   # "must change password at next login" is a scored item
         if set_password "$u" "$DEFAULT_PASSWORD"; then
+            (( expired )) && passwd -e "$u" >/dev/null 2>&1
             echo "$u" >> "$state"
             log_score 5 "Changed password for authorized user $u"
             count=$((count + 1))

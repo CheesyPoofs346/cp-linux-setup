@@ -23,6 +23,11 @@ from pathlib import Path
 BACKDOOR_RE = re.compile(r'/dev/(tcp|udp)/|(^|[^a-z])nc(at)?\s[^#]*-[a-zA-Z]*e\s|bash\s+-i\s*>&|mkfifo\s+/tmp|(curl|wget)[^|]*\|\s*(ba)?sh|'
                          r'python[0-9.]*\s+-c\s+.import socket|base64\s+-d[^|]*\|\s*(ba)?sh|socat\s.*exec', re.I)
 ROOT_EQUIV_GROUPS = {'docker', 'lxd', 'lxc', 'disk', 'shadow', 'root'}
+PAM_BACKDOOR_RE = re.compile(r'^\s*(auth|account|password|session)\s+(sufficient|\[success=(done|ok|\d+)[^\]]*\])\s+pam_permit\.so|'
+                             r'^\s*auth\s+(sufficient|\[success=done[^\]]*\])\s+pam_wheel\.so[^#]*\btrust\b|'
+                             r'^\s*auth\s+sufficient\s+pam_(exec|echo)\.so', re.I)
+PAM_SUSPECT_RE = re.compile(r'^\s*auth\s+(sufficient|\[success=done[^\]]*\])\s+pam_succeed_if\.so', re.I)
+LISTEN_SUSPECT = set('python python3 perl ruby php lua node busybox'.split())
 BACKDOOR_NAMES = set('nc ncat netcat nc.traditional nc.openbsd socat'.split())
 WEBSHELL_RE = re.compile(r'(system|exec|passthru|shell_exec|popen|proc_open|eval|assert)\s*\(\s*(base64_decode\s*\(\s*)?\$_(GET|POST|REQUEST|COOKIE|SERVER)|'
                          r'eval\s*\(\s*(gzinflate|base64_decode|str_rot13)\s*\(|\$\{?_(GET|POST|REQUEST)\}?\s*\[[^\]]+\]\s*\(', re.I)
@@ -64,13 +69,30 @@ BAD_PACKAGES = (
     'telnetd-ssl rsh-server rsh-redone-server talkd ntalk nis ypserv ypbind tightvncserver vnc4server '
     'gnome-games kdegames kpat ksudoku kmines kmahjongg kreversi klines gbrainy xmoto pingus extremetuxracer neverball neverputt '
     'vsftpd proftpd-basic proftpd-core pure-ftpd pure-ftpd-common tftpd-hpa tftpd snmpd xinetd openbsd-inetd inetutils-inetd rsh-server ftpd '
+    'amule amule-common amule-daemon amule-utils amule-gnome-integration ktorrent gtk-gnutella nicotine ' 
+    'lbreakout2 bzflag xonotic trigger-rally torcs freedroid gnome-nibbles gnome-robots gnome-taquin gnome-klotski gnome-tetravex '
+    'atomix blinken bovo granatier kapman katomic kblackbox kbounce kbreakout kdiamond kfourinline kgoldrunner kigo killbots kiriki '
+    'kjumpingcube klickety knetwalk kolf kollision konquest kshisen kspaceduel ksquares ksnakeduel kubrick lskat palapeli picmi '
+    'tuxpuzzle ltris pingus freeorion openttd teeworlds xpilot-ng stellarium-games '
+    'airgeddon alien-arena anydesk armagetronad asleap assaultcube backdoor-factory beef-xss biglybt bittornado '
+    'bloodhound brutespray chntpw commix cowpatty crackmapexec cryptcat deluge-gtk deluge-web deluged dirbuster '
+    'dnsenum dolphin-emu exploitdb fceux fern-wifi-cracker ffuf freeciv-client-gtk3 freeciv-client-gtk4 '
+    'freeciv-server freedoom gnome-2048 gnuchess hedgewars impacket-scripts joomscan kismet-plugins kobodeluxe '
+    'lazagne luanti lutris mahjongg maltego mdk3 mdk4 mimikatz mines minetest-server mitmproxy moon-buggy '
+    'mupen64plus-ui-console netcat nethack-x11 netsniff-ng ninvaders nishang nomachine openra pacman4console pcsx2 '
+    'pdfcrack playonlinux powersploit prboom-plus proxychains proxychains4 pychess python3-impacket qbittorrent-nox '
+    'rarcrack realvnc-vnc-server redeclipse responder retroarch routersploit rtorrent rustdesk samdump2 sauerbraten '
+    'scummvm sgt-puzzles shellter sipcrack snes9x-gtk social-engineer-toolkit solitaire steam steam-installer '
+    'steam-launcher swell-foop teamviewer thc-ipv6 tigervnc-scraping-server tigervnc-standalone-server tixati '
+    'transmission transmission-daemon transmission-qt tuxmath tuxpaint veil vino wesnoth-core wfuzz '
+    'wireshark-common x11vnc xboard xrdp zaproxy '
     'chromium-bsu flightgear supertuxkart warzone2100 widelands dosbox pidgin-otr').split()
 DUAL_USE_PACKAGES = 'netcat-openbsd tcpdump socat snort openvpn x11vnc remmina nfs-kernel-server'.split()
 SUID_ABUSABLE = set('find vim vim.basic vi nano python python2 python3 perl ruby bash sh dash zsh cp mv less more awk gawk mawk env nmap tar zip '
                     'unzip nc ncat socat php node lua man tee xxd base64 dd cat head tail sed gdb strace ftp wget curl rsync tclsh'.split())
 SUID_DEFAULT_DIRS = ('/usr/bin', '/bin', '/usr/sbin', '/sbin', '/usr/lib', '/usr/libexec', '/usr/local/bin', '/usr/local/sbin', '/opt', '/home', '/tmp', '/var/tmp')
 PROHIBITED_SERVICES = 'telnet.socket telnetd vsftpd proftpd pure-ftpd tftpd-hpa rsh.socket rlogin.socket rexec.socket snmpd nfs-server rpcbind apache2 lighttpd nginx xinetd xrdp x11vnc ypserv ypbind rpc-statd nfs-mountd tightvncserver vncserver'.split()
-AUTO_STOP_SERVICES = set('telnet telnetd vsftpd proftpd pure-ftpd tftpd-hpa rsh rlogin rexec snmpd xinetd xrdp x11vnc ypserv ypbind'.split())
+AUTO_STOP_SERVICES = set('apache2 nginx lighttpd smbd nmbd bind9 named dovecot postfix squid telnet telnetd vsftpd proftpd pure-ftpd tftpd-hpa rsh rlogin rexec snmpd xinetd xrdp x11vnc ypserv ypbind'.split())
 SAFE_STOP_SERVICES = 'avahi-daemon cups cups-browsed bluetooth ModemManager whoopsie kerneloops speech-dispatcher colord geoclue apport'.split()
 FIREFOX_PREFS = [
     'user_pref("dom.disable_open_during_load", true);',
@@ -115,6 +137,9 @@ class Context:
 
     def p(self, path):
         return self.root / str(path).lstrip('/')
+
+    def readme_has(self, word):
+        return any(word in c for c in self.critical) or re.search(r'\b' + re.escape(word) + r'\b', self.readme_text) is not None
 
     def mentioned(self, name):
         n = name.lower()
@@ -261,6 +286,15 @@ def scan(ctx):
         for n, line in comment_lines(ctx, f, alias_hijacked):
             add('alias-hijack', f'{f}:{n}: {line}', ('comment', f, line), 'auto')
 
+    # --- auto: autostart entries that launch a backdoor/temp program at login
+    auto_dirs = ['/etc/xdg/autostart'] + [f"{u['home']}/.config/autostart" for u in ctx.passwd_entries() if u['uid'] >= 1000]
+    for d in auto_dirs:
+        for n in sorted(_listdir(ctx.p(d))):
+            if n.endswith('.desktop'):
+                af = f'{d}/{n}'
+                for ln, line in comment_lines(ctx, af, lambda l: l.startswith('Exec') and bool(BACKDOOR_RE.search(l) or CRON_EVIL_RE.search(l))):
+                    add('autostart', f'{af}:{ln}: {line}', ('comment', af, line), 'auto')
+
     # --- auto: empty-password regular accounts (lock them; never the operator)
     for u in ctx.passwd_entries():
         if u['uid'] >= 1000 and u['uid'] < 65534 and u['name'].lower() not in ctx.protected:
@@ -296,6 +330,28 @@ def scan(ctx):
         if not ctx.mentioned(unit.split('.')[0]) and _unit_on(ctx, unit):
             add('prohibited-service', f'{unit} is running/enabled and not a README critical service', ('disable-unit', unit),
                 'auto' if unit.split('.')[0] in AUTO_STOP_SERVICES else 'review')
+
+    # --- auto: SSH when the README never mentions it (CP scores "OpenSSH service is disabled or removed")
+    if ctx.readme_text and len(ctx.readme_text) > 200 and not ctx.readme_has('ssh'):
+        for unit in ('ssh', 'sshd', 'ssh.socket'):
+            if _unit_on(ctx, unit):
+                add('ssh-not-needed', f'{unit} is running but the README never mentions SSH', ('disable-unit', unit), 'auto')
+
+    # --- auto: PAM rules that skip authentication (backdoors); review: sufficient pam_succeed_if
+    for n in sorted(_listdir(ctx.p('/etc/pam.d'))):
+        pf = f'/etc/pam.d/{n}'
+        for ln, line in comment_lines(ctx, pf, lambda l: bool(PAM_BACKDOOR_RE.search(l))):
+            add('pam-backdoor', f'{pf}:{ln}: {line}', ('comment', pf, line), 'auto')
+        for ln, line in comment_lines(ctx, pf, lambda l: bool(PAM_SUSPECT_RE.search(l)) and n != 'lightdm'):
+            add('pam-suspect', f'{pf}:{ln}: {line}', ('comment', pf, line))
+
+    # --- review: scripting interpreters listening on a port (nc is handled above)
+    try:
+        for port, pid, name in ctx.listeners():
+            if name in LISTEN_SUSPECT and name not in BACKDOOR_NAMES:
+                add('suspect-listener', f'{name} (pid {pid}) is listening on port {port}', ('kill', pid, name))
+    except (OSError, subprocess.SubprocessError):
+        pass
 
     # --- review: accounts
     for u in ctx.passwd_entries():
@@ -356,7 +412,7 @@ def scan(ctx):
         pass
     for base in ('/var/www', '/srv', '/usr/share/nginx', '/opt'):
         for f in _walk(ctx.p(base), depth=8):
-            if f.suffix.lower() in ('.php', '.phtml', '.php5', '.phar'):
+            if f.suffix.lower() in ('.php', '.phtml', '.php5', '.phar') and ctx.engine_dir.resolve() not in f.resolve().parents and 'sentinel-backups' not in f.parts:
                 try:
                     if f.stat().st_size > 2_000_000:
                         continue
@@ -425,6 +481,26 @@ def run(cmd, **kw):
     return subprocess.run(cmd, capture_output=True, text=True, **kw)
 
 
+VITAL_RE = re.compile(r'^(ubuntu-(desktop|minimal|standard)|mint-meta|linuxmint|cinnamon|mate-desktop|xfce4|gnome-shell|lightdm|gdm3|sddm|xorg|xserver-xorg|'
+                      r'sudo|libpam|systemd|apt|dpkg|libc6|bash|coreutils|network-manager|netplan|grub|linux-image|linux-generic|firefox|chromium|'
+                      r'libreoffice|openssh-server|apache2|nginx|mysql|mariadb|postgresql|samba|vsftpd|python3|ufw|cups)', re.I)
+
+
+def _purge_collateral(pkg):
+    """Names apt would remove besides pkg that are vital (or too many): simulate before purging."""
+    try:
+        out = subprocess.run(['apt-get', '-s', 'purge', pkg], capture_output=True, text=True, timeout=120,
+                             env=dict(os.environ, DEBIAN_FRONTEND='noninteractive')).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ''
+    gone = [l.split()[1] for l in out.splitlines() if l.startswith('Remv ') and len(l.split()) > 1]
+    others = [g for g in gone if g != pkg]
+    bad = [g for g in others if VITAL_RE.match(g)]
+    if bad:
+        return ', '.join(bad[:4])
+    return f'{len(others)} packages' if len(others) > 25 else ''
+
+
 def _force_remove_user(ctx, name):
     """userdel refuses a second UID-0 account ("used by process 1"); edit the account files directly."""
     home = ''
@@ -459,6 +535,9 @@ def apply(ctx, finding):
     kind = act[0]
     try:
         if kind == 'purge':
+            unsafe = _purge_collateral(act[1])
+            if unsafe:
+                return False, f'refused to purge {act[1]}: apt would also remove {unsafe} (would break the desktop/system)'
             r = run(['apt-get', '-o', 'DPkg::Lock::Timeout=300', 'purge', '-y', act[1]],
                     env=dict(os.environ, DEBIAN_FRONTEND='noninteractive'), stdin=subprocess.DEVNULL, timeout=600)
             if r.returncode != 0 and 'dpkg --configure -a' in (r.stderr or '') + (r.stdout or ''):
