@@ -565,7 +565,7 @@ EOF
                     if grep -q "^\[greeter\]" "$gdm_conf"; then
                         sed -i "/^\[greeter\]/a disable-user-list=true" "$gdm_conf"
                     else
-                        echo -e "\n[greeter]\ndisable-user-list=true" >> "$gD'M_conf"
+                        echo -e "\n[greeter]\ndisable-user-list=true" >> "$gdm_conf"
                     fi
                     log_success "Updated GDM3 custom.conf"
                 fi

@@ -15,6 +15,27 @@ import score_tracker
 
 
 class OfflineSafetyTests(unittest.TestCase):
+    def test_gdm_configuration_does_not_create_a_stray_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'etc/gdm3').mkdir(parents=True)
+            config = root / 'etc/gdm3/custom.conf'
+            config.write_text('[daemon]\n')
+            script = '''source "$1"
+detect_display_manager() { echo gdm3; }
+backup_file() { :; }
+dconf() { :; }
+body=$(declare -f disable_user_enumeration)
+body=${body//\\/etc\\//$TEST_ROOT/etc/}
+eval "$body"
+disable_user_enumeration
+'''
+            result = subprocess.run(['bash', '-c', script, 'test', str(ROOT / 'modules/account_policy.sh')],
+                                    cwd=directory, env=dict(os.environ, TEST_ROOT=directory), capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('disable-user-list=true', config.read_text())
+            self.assertEqual(sorted(p.name for p in root.iterdir()), ['etc'])
+
     def test_failed_penalty_recovery_is_not_reported_as_restored(self):
         with tempfile.TemporaryDirectory() as directory:
             report = Path(directory) / 'score.html'
