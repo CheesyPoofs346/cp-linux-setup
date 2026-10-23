@@ -299,10 +299,18 @@ def apply_targeted_hardening(engine_dir):
         except Exception:
             pass
 
+    def ensure_keys(path, text, sep):
+        """Append only the keys the file lacks; never replace a hardened file written by a module."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        have = path.read_text(encoding='utf-8', errors='ignore') if path.exists() else ''
+        present = {re.split(r'[\s=]+', l.strip())[0].lower() for l in have.splitlines() if l.strip() and not l.lstrip().startswith('#')}
+        add = [l for l in text.strip().splitlines() if re.split(r'[\s=]+', l.strip())[0].lower() not in present]
+        if add:
+            path.write_text(have + ('' if have.endswith('\n') or not have else '\n') + '\n'.join(add) + '\n', encoding='utf-8')
+
     sshd_conf_d = Path('/etc/ssh/sshd_config.d/99-cyberpatriot.conf')
     try:
-        sshd_conf_d.parent.mkdir(parents=True, exist_ok=True)
-        sshd_conf_d.write_text("PermitRootLogin no\nPermitEmptyPasswords no\nX11Forwarding no\nMaxAuthTries 4\n")
+        ensure_keys(sshd_conf_d, "PermitRootLogin no\nPermitEmptyPasswords no\nX11Forwarding no\nMaxAuthTries 4\n", ' ')
     except Exception:
         pass
     run_command("systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || service ssh restart 2>/dev/null || true")
@@ -310,7 +318,7 @@ def apply_targeted_hardening(engine_dir):
     # 7. Sysctl network security
     sysctl_file = Path('/etc/sysctl.d/99-cyberpatriot-hardening.conf')
     try:
-        sysctl_file.write_text("""net.ipv4.tcp_syncookies = 1
+        ensure_keys(sysctl_file, """net.ipv4.tcp_syncookies = 1
 net.ipv4.conf.all.rp_filter = 1
 net.ipv4.conf.default.rp_filter = 1
 net.ipv4.conf.all.accept_redirects = 0
@@ -325,7 +333,7 @@ net.ipv4.ip_forward = 0
 fs.protected_hardlinks = 1
 fs.protected_symlinks = 1
 kernel.randomize_va_space = 2
-""")
+""", ' ')
         run_command("sysctl -p /etc/sysctl.d/99-cyberpatriot-hardening.conf 2>/dev/null || true")
     except Exception:
         pass

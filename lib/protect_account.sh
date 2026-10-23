@@ -13,7 +13,7 @@ python3 "$ENGINE_DIR/lib/peer_review.py" --check-sources
 python3 "$ENGINE_DIR/lib/account_guard.py" check "$guard"
 home=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["home"])' "$guard")
 # Direct legacy writes cannot change account databases or PAM policy during non-account modules
-if [[ "$module" != "user_auditing" && "$module" != "account_policy" && "$module" != "os_settings" ]]; then
+if [[ "$module" != "user_auditing" && "$module" != "account_policy" && "$module" != "os_settings" && "$module" != "local_policy" && "$module" != "security_policy" ]]; then
     for path in /etc/passwd /etc/group /etc/shadow /etc/gshadow /etc/sudoers /etc/login.defs /etc/pam.d /etc/sudoers.d /etc/security; do
         [[ -e "$path" ]] || continue
         mount --bind "$path" "$path"
@@ -21,7 +21,8 @@ if [[ "$module" != "user_auditing" && "$module" != "account_policy" && "$module"
     done
 fi
 # Protect main user home directory from accidental deletion/modification
-if [[ -e "$home" && "$home" != "/" && "$home" != "/root" ]]; then
+# ssh_hardening installs the operator's authorized_keys, so their home must stay writable for it
+if [[ "$module" != "ssh_hardening" && -e "$home" && "$home" != "/" && "$home" != "/root" ]]; then
     mount --bind "$home" "$home" 2>/dev/null || true
     mount -o remount,bind,ro "$home" 2>/dev/null || true
 fi

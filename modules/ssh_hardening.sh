@@ -142,13 +142,14 @@ Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes256-ctr
 MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
 KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256
 
-# Subsystem
-Subsystem sftp internal-sftp
-
 ${allow_users_line}
 EOF
 
     chmod 0644 "$SSHD_CONFIG_FILE"
+    # Subsystem may be defined only once; the stock sshd_config already has it (a duplicate fails sshd -t).
+    if ! grep -qE '^[[:space:]]*Subsystem[[:space:]]' /etc/ssh/sshd_config 2>/dev/null; then
+        printf 'Subsystem sftp internal-sftp\n' >> "$SSHD_CONFIG_FILE"
+    fi
 
     # No key to install: never lock the operator out; keep password logins, harden everything else.
     if [[ -z "$SSH_PUBLIC_KEY" ]]; then
@@ -160,7 +161,7 @@ EOF
     local main_sshd_config="/etc/ssh/sshd_config" pair key val
     if [[ -f "$main_sshd_config" ]]; then
         backup_file "$main_sshd_config" 2>/dev/null || true
-        for pair in "PermitRootLogin no" "PermitEmptyPasswords no" "Protocol 2" "X11Forwarding no" "MaxAuthTries 4"                     "PermitUserEnvironment no" "HostbasedAuthentication no" "IgnoreRhosts yes" "LoginGraceTime 60"                     "ClientAliveInterval 300" "ClientAliveCountMax 2" "LogLevel VERBOSE" "UsePAM yes" "StrictModes yes"                     "AllowAgentForwarding no" "MaxSessions 4"; do
+        for pair in "PermitRootLogin no" "PermitEmptyPasswords no" "Protocol 2" "X11Forwarding no" "MaxAuthTries 4"                     "PermitUserEnvironment no" "HostbasedAuthentication no" "IgnoreRhosts yes" "LoginGraceTime 60"                     "ClientAliveInterval 300" "ClientAliveCountMax 2" "LogLevel VERBOSE" "UsePAM yes" "StrictModes yes"                     "AllowAgentForwarding no" "MaxSessions 4" "PubkeyAuthentication yes"; do
             key=${pair%% *}; val=${pair#* }
             if grep -qE "^[[:space:]]*#?[[:space:]]*${key}[[:space:]]" "$main_sshd_config"; then
                 sed -i -E "s/^[[:space:]]*#?[[:space:]]*${key}[[:space:]].*/${key} ${val}/" "$main_sshd_config"

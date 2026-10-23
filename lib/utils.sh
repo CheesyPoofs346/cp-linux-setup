@@ -85,6 +85,14 @@ check_dependencies() {
         fi
     done
 
+    if [[ ${#missing[@]} -gt 0 && $EUID -eq 0 ]] && command_exists apt-get; then
+        log_info "Installing missing dependencies: ${missing[*]}"
+        DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing[@]}" >/dev/null 2>&1 || true
+        local still=()
+        for cmd in "${missing[@]}"; do command_exists "$cmd" || still+=("$cmd"); done
+        missing=("${still[@]}")
+    fi
+
     if [[ ${#missing[@]} -gt 0 ]]; then
         log_error "Missing required dependencies: ${missing[*]}"
         log_info "Install them with: sudo apt-get install ${missing[*]}"

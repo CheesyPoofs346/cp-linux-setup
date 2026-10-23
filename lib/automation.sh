@@ -9,6 +9,54 @@ snapshot_main_account() {
 check_main_account() {
     python3 "$ENGINE_DIR/lib/account_guard.py" check "$ENGINE_DIR/data/protected-account.json"
 }
+# Planted chattr +i flags make later edits fail ("Operation not permitted"); clear them on config trees first.
+# Finish half-configured dpkg state and reinstall authentication packages whose files were swapped
+# (a sabotaged pam_deny.so also leaves libpam-modules "in a mess", which breaks every later apt run).
+# Background apt jobs (unattended-upgrade, apt-daily) hold the dpkg lock for hours and starve every later apt call.
+quiesce_apt() {
+    command -v systemctl >/dev/null 2>&1 || return 0
+    local unit
+    for unit in unattended-upgrades.service apt-daily.service apt-daily-upgrade.service; do
+        systemctl is-active --quiet "$unit" 2>/dev/null && systemctl stop "$unit" 2>/dev/null
+    done
+    pgrep -f 'unattended-upgrade|apt.systemd.daily' >/dev/null 2>&1 && pkill -f 'unattended-upgrade|apt.systemd.daily' 2>/dev/null
+    printf 'DPkg::Lock::Timeout "300";\n' > /etc/apt/apt.conf.d/99cp-lock-timeout 2>/dev/null
+    return 0
+}
+
+repair_package_state() {
+    command -v dpkg >/dev/null 2>&1 || return 0
+    local pkg list bad=()
+    export DEBIAN_FRONTEND=noninteractive
+    quiesce_apt
+    dpkg --configure -a >/dev/null 2>&1 || true
+    apt-get -f install -y >/dev/null 2>&1 || true
+    for pkg in libpam-modules libpam-modules-bin libpam-runtime libpam0g login passwd sudo openssh-server util-linux; do
+        list=/var/lib/dpkg/info/$pkg.md5sums
+        [[ -f "$list" ]] || list=/var/lib/dpkg/info/$pkg:amd64.md5sums
+        [[ -f "$list" ]] || continue
+        (cd / && md5sum -c --quiet "$list" >/dev/null 2>&1) || bad+=("$pkg")
+    done
+    if dpkg --audit 2>/dev/null | grep -q 'in a mess'; then bad+=(libpam-modules); fi
+    if (( ${#bad[@]} )); then
+        log_warn "Reinstalling tampered/broken packages: ${bad[*]}"
+        apt-get install --reinstall -y "${bad[@]}" >/dev/null 2>&1 || log_warn "Reinstall of ${bad[*]} failed"
+        dpkg --configure -a >/dev/null 2>&1 || true
+    fi
+    return 0
+}
+
+clear_immutable_flags() {
+    command -v lsattr >/dev/null 2>&1 || return 0
+    local f count=0
+    while IFS= read -r f; do
+        [[ -n "$f" ]] || continue
+        chattr -ia -- "$f" 2>/dev/null && count=$((count + 1))
+    done < <(lsattr -R /etc /root /home /opt /usr/lib/x86_64-linux-gnu/security /lib/x86_64-linux-gnu/security /usr/lib/openssh /usr/bin /usr/sbin /var/spool/cron 2>/dev/null | awk '$1 ~ /[ia]/ && NF == 2 {print $2}')
+    (( count )) && log_success "Cleared immutable flag on $count file(s)"
+    return 0
+}
+
 run_anomaly_audit() {
     AUDIT_PACKAGE_CHECK="${1:-0}" python3 "$ENGINE_DIR/lib/anomaly_audit.py"
 }
@@ -134,6 +182,11 @@ run_auto() {
         return 1
     fi
     printf 'anomaly_audit\tREPORT_SAVED\n' >> "$report"
+    # Deterministic forensics (no AI, read-only evidence). Always first, before any remediation destroys evidence.
+    if [[ "${FORENSICS_DET:-1}" != 0 ]]; then
+        log_info "Deterministic forensics solver running..."
+        python3 -I "$ENGINE_DIR/lib/forensics_det.py" 2>&1 | tee -a "$ENGINE_DIR/data/forensics-det.log" || log_warn "Deterministic forensics solver failed; continuing"
+    fi
     # Forensic evidence investigation (can be skipped via Enter or SKIP_FORENSICS=1)
     if [[ "${SKIP_FORENSICS:-0}" == 1 ]]; then
         log_info "SKIP_FORENSICS=1 active: Skipping forensics and proceeding immediately to remediation..."
@@ -177,6 +230,8 @@ run_auto() {
     else
         printf 'peer_review\tAPPROVED\n' >> "$report"
     fi
+    clear_immutable_flags
+    repair_package_state
     for module in "${MODULES[@]}"; do
         [[ "$module" == readme_parser || "$module" == forensics_questions ]] && continue
         if (( failed )); then
@@ -204,6 +259,7 @@ run_auto() {
             fi
         fi
         check_main_account || return 1
+        quiesce_apt
         if timeout --foreground --kill-after=10 "${AUTO_MODULE_TIMEOUT:-1800}" bash "$ENGINE_DIR/lib/protect_account.sh" "$module" </dev/null; then
             status=PASS
         else
@@ -286,6 +342,20 @@ run_worker_module() {
             elif [[ -n "${PROTECTED_USER:-}" ]]; then
                 export SSH_TARGET_USER="$PROTECTED_USER"
             fi
+        fi
+        if [[ -z "${SSH_TARGET_USER:-}" ]]; then
+            local cand readme_plain
+            readme_plain=$(sed 's/<[^>]*>/ /g' "$ENGINE_DIR/data/auto-source.html" 2>/dev/null)
+            for cand in \
+                "$(printf '%s' "$readme_plain" | grep -oiE '[a-z_][a-z0-9_-]*:[^ ]+ *\( *you *\)' | head -1 | cut -d: -f1)" \
+                "$(printf '%s' "$readme_plain" | grep -oiE '(log(ging)? in(to)?|for|to) the [a-z_][a-z0-9_-]* user' | head -1 | awk '{print $(NF-1)}')" \
+                "${SUDO_USER:-}" "$(logname 2>/dev/null)" "$(awk -F: '$3>=1000 && $3<60000 {print $1; exit}' /etc/passwd)"; do
+                if [[ -n "$cand" && "$cand" != root ]] && id "$cand" >/dev/null 2>&1; then
+                    export SSH_TARGET_USER="$cand"
+                    log_info "SSH key target user resolved to $cand"
+                    break
+                fi
+            done
         fi
         if [[ -n "${SSH_TARGET_USER:-}" && -f "${SSH_PUBLIC_KEY_FILE:-}" ]]; then
             if echo "$README_DATA" | jq -e --arg user "$SSH_TARGET_USER" '.all_users[] | select(.name == $user)' >/dev/null 2>&1; then

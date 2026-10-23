@@ -422,6 +422,30 @@ def scan(ctx):
                 if WEBSHELL_RE.search(text):
                     rel = '/' + str(f.relative_to(ctx.root)).replace(os.sep, '/')
                     add('webshell', f'{rel} looks like a PHP web shell', ('rm', rel), 'auto')
+    # --- unpackaged files holding reverse-shell code (dpkg-aware, anywhere under system/home trees)
+    try:
+        import forensics_det
+        for score, rel, why in forensics_det.backdoor_candidates(forensics_det.Evidence(str(ctx.root), ctx.readme_text)):
+            if 'cp-linux-setup' in rel or PROTECT_RE.search(rel) or ctx.engine_dir.resolve() in Path(ctx.p(rel)).resolve().parents:
+                continue
+            add('backdoor-file', f'{rel} is not part of any package: {why}', ('rm', rel), 'auto' if score >= 10 else 'review')
+    except (ImportError, OSError, ValueError):
+        pass
+    # --- media files (README forbids them): audio/video always, pictures in the user's own folders
+    media_ext = {'.mp3', '.mp4', '.m4a', '.m4v', '.aac', '.ogg', '.oga', '.opus', '.wav', '.flac', '.wma', '.wmv', '.avi', '.mkv', '.mov', '.webm', '.mpg', '.mpeg', '.flv'}
+    picture_ext = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff', '.heic'}
+    forbidden = re.search(r'media (files?|content)|\bmusic\b|\bmp3|audio files?|video files?|pictures?|photos?', ctx.readme_text) is not None
+    for home in [Path(ctx.p('/root'))] + sorted(Path(ctx.p('/home')).glob('*')):
+        for f in _walk(home, depth=4):
+            parts = f.relative_to(home).parts
+            if not f.is_file() or f.is_symlink() or any(p.startswith('.') or p in ('snap', 'cp-linux-setup') for p in parts):
+                continue
+            ext = f.suffix.lower()
+            rel = '/' + str(f.relative_to(ctx.root)).replace(os.sep, '/')
+            if ext in media_ext:
+                add('media-file', f'{rel} is an audio/video file', ('rm', rel), 'auto' if forbidden else 'review')
+            elif ext in picture_ext and parts[0] in ('Downloads', 'Documents', 'Desktop', 'Pictures', 'Music', 'Videos', 'Public') and forbidden:
+                add('media-file', f'{rel} is a picture in a user folder and the README prohibits media', ('rm', rel), 'auto')
     for base in ('/tmp', '/var/tmp', '/dev/shm'):
         for f in _walk(ctx.p(base), depth=3):
             if f.is_file() and os.access(f, os.X_OK) and not f.is_symlink() and not PROTECT_RE.search(str(f)) and 'cp-linux-setup' not in str(f):
@@ -529,17 +553,38 @@ def _force_remove_user(ctx, name):
     return gone, f'force-removed user {name}'
 
 
+_APT_QUIET = []
+
+
+def quiesce_apt():
+    """Background apt jobs (unattended-upgrade, apt-daily) hold the dpkg lock for hours; stop them once."""
+    if _APT_QUIET or os.geteuid() != 0:
+        return
+    _APT_QUIET.append(1)
+    for unit in ('unattended-upgrades.service', 'apt-daily.service', 'apt-daily-upgrade.service', 'apt-daily.timer', 'apt-daily-upgrade.timer'):
+        run(['systemctl', 'stop', unit], timeout=60)
+    run(['pkill', '-f', 'unattended-upgrade'], timeout=30)
+    run(['pkill', '-f', 'apt.systemd.daily'], timeout=30)
+
+
 def apply(ctx, finding):
     """Perform one finding's fix. Returns (ok, message). Paths are re-validated against the root prefix."""
     act = finding.action
     kind = act[0]
     try:
         if kind == 'purge':
+            quiesce_apt()
             unsafe = _purge_collateral(act[1])
             if unsafe:
                 return False, f'refused to purge {act[1]}: apt would also remove {unsafe} (would break the desktop/system)'
             r = run(['apt-get', '-o', 'DPkg::Lock::Timeout=300', 'purge', '-y', act[1]],
                     env=dict(os.environ, DEBIAN_FRONTEND='noninteractive'), stdin=subprocess.DEVNULL, timeout=600)
+            blob = (r.stderr or '') + (r.stdout or '')
+            if r.returncode != 0 and ('Unmet dependencies' in blob or 'fix-broken' in blob):
+                run(['apt-get', '-o', 'DPkg::Lock::Timeout=300', '-f', 'install', '-y'],
+                    env=dict(os.environ, DEBIAN_FRONTEND='noninteractive'), stdin=subprocess.DEVNULL, timeout=900)
+                r = run(['apt-get', '-o', 'DPkg::Lock::Timeout=300', 'purge', '-y', act[1]],
+                        env=dict(os.environ, DEBIAN_FRONTEND='noninteractive'), stdin=subprocess.DEVNULL, timeout=600)
             if r.returncode != 0 and 'dpkg --configure -a' in (r.stderr or '') + (r.stdout or ''):
                 run(['dpkg', '--configure', '-a'], env=dict(os.environ, DEBIAN_FRONTEND='noninteractive'), stdin=subprocess.DEVNULL, timeout=600)
                 r = run(['apt-get', '-o', 'DPkg::Lock::Timeout=300', 'purge', '-y', act[1]],
