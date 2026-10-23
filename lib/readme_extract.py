@@ -62,13 +62,76 @@ def section_kind(line):
     return None
 
 
+LABELS = {'password', 'passwd', 'pass', 'pw', 'username', 'user', 'users', 'name', 'account', 'accounts', 'you', 'note', 'notes', 'admin', 'administrator',
+          'administrators', 'standard', 'group', 'groups', 'authorized', 'the', 'a', 'an', 'this', 'all', 'also'}
+STOPWORDS = {'the', 'this', 'that', 'our', 'all', 'any', 'each', 'every', 'these', 'those', 'your', 'an', 'a', 'it', 'which', 'what', 'company', 'system',
+             'her', 'him', 'them', 'his', 'hers', 'she', 'he', 'they', 'for', 'new', 'and', 'with', 'named', 'called', 'user', 'account', 'employee'}
+
+
 def entry_name(line):
     clean = re.sub(r'^[\s*\-•#>\d.)]+', '', line).strip()
     low = clean.lower()
     if not clean or low.startswith(SKIP_PREFIX):
         return None, clean
     m = re.match('(' + NAME + r')(?=$|[\s:,;(])', clean)
-    return (m[1].lower() if m else None), clean
+    name = m[1].lower() if m else None
+    return (None if name in LABELS else name), clean
+
+
+def sentences(text):
+    return [s.strip() for s in re.split(r'(?<=[.!?])\s+|\n', text) if s.strip()]
+
+
+def prose_services(text):
+    """Critical services/programs named in sentences ("OpenSSH is a critical service", "Chromium must remain")."""
+    found = []
+    def add(token):
+        token = re.sub(r'[^a-z0-9_.+-]', '', token.lower().strip())
+        token = SERVICE_ALIASES.get(token, token)
+        if token and token not in STOPWORDS and len(token) > 2 and token not in found:
+            found.append(token)
+    for s in sentences(text):
+        for m in re.finditer(r'([A-Za-z][\w.+-]*)(?:\s+(?:server|service|daemon))?\s+(?:is|are)\s+(?:a\s+|an\s+|the\s+)?(?:critical|required|essential|key|important)\s+service', s, re.I):
+            add(m[1])
+        m = re.search(r'critical services?\s*(?:are|is|include|includes)\s*:?\s*([^.]+)', s, re.I)
+        if m:
+            for part in re.split(r',|\band\b', m[1]):
+                words = re.findall(r'[A-Za-z][\w.+-]*', part)
+                if words:
+                    add(words[0])
+        for m in re.finditer(r'(?:requires?|needs?|relies on|depends on|must (?:keep|run|have))\s+(?:the\s+)?(?:an?\s+)?([A-Za-z][\w.+-]*)\s+(?:server|service|daemon)', s, re.I):
+            add(m[1])
+        for m in re.finditer(r'(?:default (?:web )?browser (?:is|=)\s+|browser,?\s+)([A-Za-z][\w.+-]*)', s, re.I):
+            if re.search(r'must|remain|keep|required|default', s, re.I):
+                add(m[1])
+        m = re.search(r'([A-Za-z][\w.+-]*)\s+(?:is|are)\s+(?:the\s+)?(?:default|company[- ]approved|required)\s+(?:web\s+)?(?:browser|firewall|mail|email)', s, re.I)
+        if m:
+            add(m[1])
+    return found
+
+
+def prose_accounts(text):
+    """Hires, demotions, promotions and terminations written as sentences."""
+    hires, demote, promote, terminated = [], set(), set(), []
+    user = r'([a-z][a-z0-9_-]{2,30})'
+    for s in sentences(text):
+        low = s.lower()
+        if re.search(r'new (hire|employee|user|member|administrator|admin)|(has|have) been hired|recently (hired|added)|create (an |a |the )?(new )?(user |admin\w* )?account|should have an account|needs? an account', low):
+            names = [n.lower() for n in re.findall(r'\(' + user + r'\)', s, re.I)]
+            if not names:
+                names = [n.lower() for n in re.findall(r'(?:user(?:name)?|account(?: for| named| called)?)\s+["“\']?' + user, s, re.I)]
+            for n in names:
+                if n not in LABELS and n not in STOPWORDS and n != 'you' and n not in [h['name'] for h in hires]:
+                    hires.append({'name': n, 'account_type': 'admin' if re.search(r'\badmin', low) else 'standard', 'groups': []})
+        for m in re.finditer(r'\b' + user + r'\b[^.]{0,40}?\b(?:is|are|should be|shall be)\s+(?:no longer|not)\s+(?:an?\s+)?admin', low):
+            demote.add(m[1])
+        for m in re.finditer(r'\b' + user + r'\b[^.]{0,30}?\b(?:should|must|needs to)\s+be\s+(?:an?\s+)?admin', low):
+            promote.add(m[1])
+        for m in re.finditer(r'\b' + user + r'\b(?:\s*\([^)]*\))?\s+(?:has|have|was|were)\s+(?:been\s+)?(?:terminated|fired|let go|dismissed)|\b' + user + r'\b[^.]{0,20}(?:no longer works|has left the company|left the company)', low):
+            n = m[1] or m[2]
+            if n and n not in terminated and n not in STOPWORDS:
+                terminated.append(n)
+    return hires, demote - promote, promote, terminated
 
 
 def groups_in(clean):
@@ -81,10 +144,18 @@ def extract(html):
     text = '\n'.join(lines)
     users, hires, terminated, services, passwords = {}, [], [], [], {}
     kind = None
+    last_user = None
     for line in lines:
         k = section_kind(line)
         if k:
             kind = k
+            continue
+        pw_line = re.match(r'^[\s*\-•]*(?:password|passwd|pass|pw)\s*[:=]\s*(\S+)', line, re.I)
+        if pw_line and last_user and kind in ('admin', 'standard'):
+            passwords[last_user] = pw_line[1]
+            continue
+        if kind in ('admin', 'standard') and len(line.split()) >= 8 and line.rstrip().endswith('.') and not line.startswith(('-', '*', '•')):
+            kind = None   # a full sentence ends the list
             continue
         if re.match(r'^(forensics|competition|important|scoring|scenario|unique identifier|this is|the .* (policy|computer))', line, re.I) \
                 and not line.startswith(('-', '*', '•')) and ' ' in line and kind in ('admin', 'standard', 'services', 'terminated', 'hires') and len(line.split()) > 6:
@@ -93,6 +164,7 @@ def extract(html):
         if kind in ('admin', 'standard'):
             name, clean = entry_name(line)
             if name:
+                last_user = name
                 users[name] = {'name': name, 'account_type': kind, 'groups': groups_in(clean)}
                 pw = re.fullmatch(NAME + r'\s*:\s*(\S+)(?:\s*\(.*\))?', clean)
                 if pw:
@@ -115,6 +187,21 @@ def extract(html):
             if name:
                 hires.append({'name': name, 'account_type': 'admin' if re.search(r'\badmin', clean, re.I) else 'standard',
                               'groups': groups_in(clean)})
+
+    p_hires, p_demote, p_promote, p_terminated = prose_accounts(text)
+    for h in p_hires:
+        if h['name'] not in users and h['name'] not in [x['name'] for x in hires]:
+            hires.append(h)
+    for name in p_demote:
+        if name in users:
+            users[name]['account_type'] = 'standard'
+    for name in p_promote:
+        if name in users:
+            users[name]['account_type'] = 'admin'
+    terminated += [t for t in p_terminated if t not in users]
+    for s in prose_services(text):
+        if s not in services:
+            services.append(s)
 
     groups_to_create = []
     for m in re.finditer(r'create (?:a |the )?(?:new )?group\s+(?:called |named )?["“\']?(' + NAME + r')["”\']?\s*(?:and|,)?\s*(?:add|with|containing|including)?[^.\n]*?(?:users?|members?)?[:\s]+((?:' + NAME + r'(?:\s*,\s*(?:and\s+)?|\s+and\s+))*' + NAME + r')', text, re.I):

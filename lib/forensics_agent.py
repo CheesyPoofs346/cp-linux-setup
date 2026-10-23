@@ -1118,7 +1118,7 @@ def main():
         return entry
 
     if pending:
-        workers = max(1, min(int(os.environ.get('FORENSICS_PARALLEL', '3')), len(pending)))
+        workers = max(1, min(int(os.environ.get('FORENSICS_PARALLEL', '2')), len(pending)))
         print(f'Forensics: investigating {len(pending)} question(s) in parallel (Press ENTER anytime to skip them all)...', flush=True)
         with ThreadPoolExecutor(max_workers=workers) as pool:
             for entry in pool.map(solve, pending):

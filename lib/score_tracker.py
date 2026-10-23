@@ -414,6 +414,15 @@ gsettings set com.linuxmint.updates automation-upgrade true 2>/dev/null || true
     run_command("DEBIAN_FRONTEND=noninteractive apt-get --only-upgrade install -y systemd systemd-sysv libsystemd0 systemd-timesyncd chromium chromium-browser chromium-codecs-ffmpeg-extra openssh-server openssh-client openssh-sftp-server 2>/dev/null || true")
 
 
+# Model-written commands run as root, so refuse anything that could lock us out, wreck the system or fetch-and-run code.
+UNSAFE_AI_CMD = re.compile(
+    r'rm\s+-[a-z]*r[a-z]*\s+(/|~|\*|/(home|etc|usr|var|boot|lib|bin|sbin|opt)\b)|mkfs|\bdd\s+if=|userdel|deluser|passwd\s+-l|usermod\s+-L|chage\s+-E|'
+    r'ufw\s+(disable|reset)|systemctl\s+(stop|disable|mask)\s+(ssh|sshd|networking|NetworkManager|systemd|gdm|lightdm)|'
+    r'apt(-get)?\s+(remove|purge)[^;|&]*(openssh|chromium|firefox|libreoffice|sudo|systemd|network-manager|ubuntu-desktop|mint|xorg|gdm|lightdm|\bapt\b|dpkg|libc6|bash|python3)|'
+    r'chmod\s+-R\s+0?777|>\s*/etc/(passwd|shadow|sudoers|fstab)|(curl|wget)[^|;]*\|\s*(ba)?sh|\b(shutdown|reboot|halt|poweroff)\b|:\(\)\s*\{|'
+    r'iptables\s+-F|nft\s+flush|visudo|chattr\s+\+[ia]', re.I)
+
+
 def query_ai_optimizer(report_info, engine_dir):
     """Uses configured reasoning model to inspect scoring gap and generate targeted commands."""
     try:
@@ -457,9 +466,11 @@ Output ONLY valid JSON containing a list of safe shell remediation commands to f
         for item in remediations:
             cmd = item.get('cmd')
             reason = item.get('reason', '')
-            if cmd and isinstance(cmd, str) and not any(k in cmd for k in ['rm -rf /', 'userdel -r rooyay', 'passwd -l rooyay']):
+            if cmd and isinstance(cmd, str) and UNSAFE_AI_CMD.search(cmd):
+                print(f"  Refused unsafe model command: `{cmd[:100]}`", flush=True)
+            elif cmd and isinstance(cmd, str):
                 print(f"  Fixing: {reason} -> `{cmd}`", flush=True)
-                run_command(cmd)
+                run_command(cmd, timeout=120)
     except Exception as e:
         print(f"Score Optimizer: Recommendation step skipped ({e})", flush=True)
 

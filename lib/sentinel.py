@@ -53,7 +53,7 @@ def alias_hijacked(line):
     rhs = m.group(2).strip().strip('\'"').lstrip(chr(92)).split()
     return not rhs or rhs[0] not in (m.group(1), f'/usr/bin/{m.group(1)}', f'/bin/{m.group(1)}')
 
-PROTECT_RE = re.compile(r'aeacus|cyberpatriot|scoring|/opt/engine|^engine$', re.I)
+PROTECT_RE = re.compile(r'aeacus|cyberpatriot|scoring|/opt/engine|^engine$|ccsclient|ccs-client|sysengine|scoreboard|cp-linux-setup|sentinel', re.I)
 
 BAD_PACKAGES = (
     'john john-data hydra hydra-gtk nmap zenmap ophcrack ophcrack-cli aircrack-ng wireshark wireshark-qt wireshark-gtk tshark '
@@ -437,7 +437,10 @@ def scan(ctx):
     # --- media files (README forbids them): audio/video always, pictures in the user's own folders
     media_ext = {'.mp3', '.mp4', '.m4a', '.m4v', '.aac', '.ogg', '.oga', '.opus', '.wav', '.flac', '.wma', '.wmv', '.avi', '.mkv', '.mov', '.webm', '.mpg', '.mpeg', '.flv'}
     picture_ext = {'.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff', '.heic'}
-    forbidden = re.search(r'media (files?|content)|\bmusic\b|\bmp3|audio files?|video files?|pictures?|photos?', ctx.readme_text) is not None
+    no = r'(prohibit|not (be )?(allowed|permitted)|forbid|unauthori[sz]ed|no |remove|delete)'
+    forbidden = re.search(no + r'[^.]{0,100}(media|music|mp3|audio|video|songs?)|(media|music|mp3|audio|video|songs?)[^.]{0,100}' + no, ctx.readme_text) is not None
+    # Personal pictures are only deleted when the README names pictures/photos/images as forbidden, never for plain "media".
+    pictures_forbidden = re.search(no + r'[^.]{0,100}(pictures?|photos?|images?)|(pictures?|photos?|images?)[^.]{0,100}' + no, ctx.readme_text) is not None
     for home in [Path(ctx.p('/root'))] + sorted(Path(ctx.p('/home')).glob('*')):
         for f in _walk(home, depth=4):
             parts = f.relative_to(home).parts
@@ -447,8 +450,8 @@ def scan(ctx):
             rel = '/' + str(f.relative_to(ctx.root)).replace(os.sep, '/')
             if ext in media_ext:
                 add('media-file', f'{rel} is an audio/video file', ('rm', rel), 'auto' if forbidden else 'review')
-            elif ext in picture_ext and parts[0] in ('Downloads', 'Documents', 'Desktop', 'Pictures', 'Music', 'Videos', 'Public') and forbidden:
-                add('media-file', f'{rel} is a picture in a user folder and the README prohibits media', ('rm', rel), 'auto')
+            elif ext in picture_ext and parts[0] in ('Downloads', 'Documents', 'Desktop', 'Pictures', 'Music', 'Videos', 'Public') and (forbidden or pictures_forbidden):
+                add('media-file', f'{rel} is a picture in a user folder and the README restricts media/pictures', ('rm', rel), 'auto' if pictures_forbidden else 'review')
     for base in ('/tmp', '/var/tmp', '/dev/shm'):
         for f in _walk(ctx.p(base), depth=3):
             if f.is_file() and os.access(f, os.X_OK) and not f.is_symlink() and not PROTECT_RE.search(str(f)) and 'cp-linux-setup' not in str(f):
@@ -736,6 +739,70 @@ def score_line(engine_dir):
         return None, None
 
 
+# What a penalty line names -> (apt package, systemd unit or '') to put back. Penalties are lines such as
+# "OpenSSH service has been stopped or removed: -5 pts" or "Chromium has been removed: -5 pts".
+PENALTY_SUBJECTS = [
+    (r'open\s*ssh|\bssh', 'openssh-server', 'ssh'), (r'apache', 'apache2', 'apache2'), (r'nginx', 'nginx', 'nginx'),
+    (r'mysql', 'mysql-server', 'mysql'), (r'maria', 'mariadb-server', 'mariadb'), (r'postgres', 'postgresql', 'postgresql'),
+    (r'samba|smb', 'samba', 'smbd'), (r'vsftpd|\bftp', 'vsftpd', 'vsftpd'), (r'bind9|\bdns\b|named', 'bind9', 'named'),
+    (r'dovecot', 'dovecot-core', 'dovecot'), (r'postfix|mail', 'postfix', 'postfix'), (r'cups|print', 'cups', 'cups'),
+    (r'chromium', 'chromium|chromium-browser', ''), (r'firefox', 'firefox', ''), (r'libre\s*office', 'libreoffice', ''),
+    (r'thunderbird', 'thunderbird', ''), (r'\bufw\b|firewall', 'ufw', 'ufw'), (r'cron', 'cron', 'cron'),
+    (r'\bphp', 'php', ''), (r'wordpress', 'wordpress', ''), (r'\bgimp', 'gimp', ''), (r'vlc', 'vlc', ''),
+]
+PENALTY_LINE = re.compile(r'(stopped|removed|disabled|deleted|missing|uninstalled|no longer)', re.I)
+
+
+def penalty_actions(report_html):
+    """(package, unit, text) to restore for each penalty line that says something needed was removed or stopped."""
+    text = re.sub(r'<(br|/p|/li|/tr|/div|/h\d)[^>]*>', '\n', report_html, flags=re.I)
+    text = re.sub(r'<[^>]+>', ' ', text)
+    out, seen = [], set()
+    for line in (l.strip() for l in text.splitlines()):
+        negative = re.search(r'[-−]\d+\s*(pts?|points?)\b', line, re.I) or re.search(r'penalt', line, re.I) and re.search(r'\d', line)
+        if not line or not negative or not PENALTY_LINE.search(line) or len(line) > 220:
+            continue
+        for pattern, pkg, unit in PENALTY_SUBJECTS:
+            if re.search(pattern, line, re.I):
+                if pkg not in seen:
+                    seen.add(pkg)
+                    out.append((pkg, unit, line))
+                break
+    return out
+
+
+def restore_penalties(ctx, log=print):
+    """Undo whatever the report says cost points (a critical service stopped or a required program removed)."""
+    if os.geteuid() != 0 or str(ctx.root) != '/':
+        return 0
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import score_tracker
+        report = score_tracker.find_scoring_report()
+        html = report.read_text(encoding='utf-8', errors='ignore') if report else ''
+    except Exception:
+        return 0
+    fixed = 0
+    for pkg, unit, line in penalty_actions(html):
+        quiesce_apt()
+        names = pkg.split('|')
+        have = any('install ok installed' in run(['dpkg', '-s', n], timeout=60).stdout for n in names)
+        if not have:
+            for n in names:
+                r = run(['apt-get', '-o', 'DPkg::Lock::Timeout=300', 'install', '-y', n], env=dict(os.environ, DEBIAN_FRONTEND='noninteractive'),
+                        stdin=subprocess.DEVNULL, timeout=900)
+                if r.returncode == 0:
+                    break
+            else:
+                continue
+        if unit:
+            run(['systemctl', 'enable', '--now', unit], timeout=60)
+        log(f'  [penalty] {line[:90]} -> restored {pkg}{" + " + unit if unit else ""}')
+        record_fix(ctx, f'penalty: restored {pkg}')
+        fixed += 1
+    return fixed
+
+
 def log_path(ctx):
     return ctx.engine_dir / 'data/sentinel-log.json'
 
@@ -924,10 +991,11 @@ def main():
         return 0
     state = load_state(ctx)
     print('Sentinel: scanning and fixing until the image is clean (Ctrl-C to stop).', flush=True)
-    last_score, quiet, rounds = None, 0, 0
+    last_score, quiet, rounds, stalled = None, 0, 0, 0
     while True:
         rounds += 1
         fixed, pending = one_pass(ctx, state, args.auto_only, args.ask)
+        fixed += restore_penalties(ctx)
         save_state(ctx, state)
         score, max_score = score_line(engine_dir)
         if score is not None:
@@ -936,7 +1004,15 @@ def main():
             if score >= max_score > 0:
                 print('  FULL POINTS - sentinel done.', flush=True)
                 return 0
+            stalled = stalled + 1 if score == last_score and not fixed else 0
             last_score = score
+            if not args.once and stalled in (6, 30, 90):
+                # Points stopped moving: let the score optimizer (AI + targeted passes) look at the report again.
+                print('  Score stalled; running the score optimizer for new ideas...', flush=True)
+                try:
+                    run([sys.executable, str(Path(__file__).resolve().parent / 'score_tracker.py')], timeout=900)
+                except (OSError, subprocess.SubprocessError):
+                    pass
         quiet = quiet + 1 if not fixed and not pending else 0
         if args.once:
             return 0

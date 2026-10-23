@@ -811,6 +811,12 @@ fix_insecure_passwords() {
     local fixed_count=0
     local clean_text
     clean_text=$(sed 's/<[^>]*>/ /g' "$readme_file" 2>/dev/null || cat "$readme_file")
+    # CP READMEs often put "password: ..." on the line after the user name; the extractor pairs them up.
+    local pw_pairs pw_tmp
+    pw_tmp=$(mktemp 2>/dev/null) && python3 "$SCRIPT_DIR/../lib/readme_extract.py" "$readme_file" "$pw_tmp" >/dev/null 2>&1 \
+        && pw_pairs=$(jq -r '.passwords // {} | to_entries[] | "\(.key): \(.value)"' "$pw_tmp" 2>/dev/null)
+    rm -f "$pw_tmp"
+    [[ -n "${pw_pairs:-}" ]] && clean_text+=$'\n'"$pw_pairs"
 
     while IFS= read -r line; do
         [[ -z "$line" ]] && continue

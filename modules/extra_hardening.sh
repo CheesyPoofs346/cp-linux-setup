@@ -79,7 +79,7 @@ extra_trust_files() {
 extra_unused_filesystems() {
     local conf=/etc/modprobe.d/cp-unused-filesystems.conf mod changed=0
     touch "$conf" 2>/dev/null || return 0
-    for mod in cramfs freevxfs jffs2 hfs hfsplus udf; do
+    for mod in cramfs freevxfs jffs2 hfs hfsplus udf dccp sctp rds tipc usb-storage firewire-core; do
         if ! grep -q "install $mod /bin/true" "$conf"; then
             printf 'install %s /bin/true\n' "$mod" >> "$conf"
             changed=1

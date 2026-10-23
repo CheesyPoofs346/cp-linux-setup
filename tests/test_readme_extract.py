@@ -33,10 +33,27 @@ class ReadmeExtractTests(unittest.TestCase):
         with patch.dict(os.environ, {'AUTO_REMEDIATE': '1'}):
             self.assertEqual(validate_readme.validate(BASE, json.loads(json.dumps(d))), 5)
 
-    def test_unstructured_mentions_become_hints(self):
+    def test_termination_sentence_is_parsed_without_ai(self):
         html = BASE.replace('<h2>Terminated Employees</h2><ul><li>mallory</li><li>trent</li></ul>',
                             '<p>Mallory was terminated last week.</p>')
-        self.assertIn('terminated_users', rx.extract(html)['unparsed_hints'])
+        d = rx.extract(html)
+        self.assertIn('mallory', d['terminated_users'])
+        self.assertNotIn('terminated_users', d['unparsed_hints'])
+
+    def test_cp_style_prose_readme(self):
+        html = ('<h2>Policy</h2><p>OpenSSH is a critical service. Chromium is the default web browser and must remain.</p>'
+                '<h2>Authorized Administrators and Users</h2><pre>Authorized Administrators:\nbenjamin (you)\n\tpassword: Abc123!xyz\n'
+                'dscott\n\tpassword: Pw9#kkkkkkk\nAuthorized Users:\ncmarcus\n</pre>'
+                '<p>A new employee, Eliza Darby (edarby), has been hired as an administrator. Please create an account for her.</p>'
+                '<p>dscott is no longer an administrator but should still have an account.</p>')
+        d = rx.extract(html)
+        types = {u['name']: u['account_type'] for u in d['all_users']}
+        self.assertEqual(types, {'benjamin': 'admin', 'dscott': 'standard', 'cmarcus': 'standard'})
+        self.assertNotIn('password', types)
+        self.assertEqual([h['name'] for h in d['recent_hires']], ['edarby'])
+        self.assertEqual(d['recent_hires'][0]['account_type'], 'admin')
+        self.assertEqual(set(d['critical_services']), {'ssh', 'chromium'})
+        self.assertEqual(d['passwords']['benjamin'], 'Abc123!xyz')
 
     def test_no_sections_means_ai_fallback(self):
         d = rx.extract('<html><body><p>Nothing structured here.</p></body></html>')
