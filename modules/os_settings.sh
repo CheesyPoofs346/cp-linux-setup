@@ -293,21 +293,17 @@ fix_system_file_permissions() {
         fi
     done
 
-    # /var/log directory - syslog group can read
+    # Service users must be able to traverse /var/log to their own log directories.
     if [[ -d /var/log ]]; then
         total_checks=$((total_checks + 1))
         log_info "Checking /var/log directory..."
 
-        # Ensure syslog group exists
-        if ! getent group syslog >/dev/null 2>&1; then
-            groupadd syslog 2>/dev/null
-        fi
-
-        chown root:syslog /var/log 2>/dev/null || true
-        chmod 750 /var/log 2>/dev/null || true
-        if [[ $? -eq 0 ]]; then
-            log_success "✓ /var/log directory (750, root:syslog)"
+        if fix_log_root_directory; then
+            log_success "✓ /var/log directory (755, root:root; individual log permissions remain separate)"
             fixed_count=$((fixed_count + 1))
+        else
+            log_error "Could not preserve /var/log service access"
+            return 1
         fi
     fi
 
@@ -689,27 +685,34 @@ enforce_grub_signature_checks() {
     return 0
 }
 
-# Remove insecure or unexpected entries from /etc/hosts
+fix_log_root_directory() {
+    local directory="${1:-/var/log}"
+    chown root:root "$directory" && chmod 755 "$directory"
+}
+
+# Ensure loopback resolution without destroying required internal/vhost mappings.
 sanitize_hosts_file() {
     log_section "Sanitizing /etc/hosts"
 
-    local hosts_file="/etc/hosts"
+    local hosts_file="${1:-/etc/hosts}"
     local hostname_value
     hostname_value=$(hostname 2>/dev/null || echo localhost)
 
     if [[ -f "$hosts_file" ]]; then
-        backup_file "$hosts_file"
+        backup_file "$hosts_file" || return 1
+    else
+        touch "$hosts_file" && chmod 644 "$hosts_file" || return 1
     fi
-
-    cat > "$hosts_file" <<EOF
-127.0.0.1   localhost
-127.0.1.1   ${hostname_value} ${hostname_value}.localdomain
-::1         ip6-localhost ip6-loopback
-ff02::1     ip6-allnodes
-ff02::2     ip6-allrouters
-EOF
-
-    log_success "✓ Reset /etc/hosts to a secure default"
+    if ! awk '{sub(/#.*/, ""); if ($1 == "127.0.0.1") for (i=2;i<=NF;i++) if ($i == "localhost") found=1} END {exit !found}' "$hosts_file"; then
+        printf '\n127.0.0.1 localhost\n' >> "$hosts_file" || return 1
+    fi
+    if ! awk '{sub(/#.*/, ""); if ($1 == "::1") for (i=2;i<=NF;i++) if ($i == "localhost" || $i == "ip6-localhost") found=1} END {exit !found}' "$hosts_file"; then
+        printf '\n::1 localhost ip6-localhost ip6-loopback\n' >> "$hosts_file" || return 1
+    fi
+    if [[ "$hostname_value" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]] && ! awk -v host="$hostname_value" '{sub(/#.*/, ""); for (i=2;i<=NF;i++) if ($i == host) found=1} END {exit !found}' "$hosts_file"; then
+        printf '\n127.0.1.1 %s\n' "$hostname_value" >> "$hosts_file" || return 1
+    fi
+    log_success "✓ Ensured loopback entries; retained other hosts mappings for review"
 
     return 0
 }
@@ -1044,7 +1047,7 @@ print_os_settings_checklist() {
     echo "65. Process information hidden from other users (/proc hidepid=2)"
     echo "66. Sudo requires password, PTY, logging, and only approved groups"
     echo "67. GRUB signature verification enforced and superuser overrides removed"
-    echo "68. /etc/hosts sanitized to default loopback entries"
+    echo "68. Loopback hosts entries ensured; custom mappings preserved for review"
     echo "69. GDM3 not configured to run under a custom user"
     echo "70. X Server TCP connections disabled"
     echo ""
@@ -1064,12 +1067,12 @@ run_os_settings() {
     fix_grub_permissions
     enforce_grub_signature_checks
     setup_grub_password
-    fix_system_file_permissions
+    fix_system_file_permissions || return 1
     harden_sudo_config
     enforce_default_umask
     secure_home_directories
     ensure_tmp_sticky_bit
-    sanitize_hosts_file
+    sanitize_hosts_file || return 1
     setup_host_conf
     fix_world_writable_files
     secure_dev_shm

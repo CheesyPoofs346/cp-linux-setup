@@ -33,7 +33,7 @@ Inspect `data/auto-results.tsv`, the run logs, `data/forensics-det.json`, forens
 
 These codes do not certify a complete security assessment or 100% score. Parser validation compares against the deterministic extractor; it cannot establish that arbitrary natural-language requirements were understood correctly. Some legacy hardening policies remain broad and may conflict with unusual image requirements.
 
-The OS gate recognizes Mint 21–23, Ubuntu 22/24/25, and Debian 12/13. Recognition is not end-to-end validation: the live practice testing for this revision uses System Hardening 7 on Ubuntu 22.04. This Linux tool does not handle Windows, Cisco/Packet Tracer, FreeBSD, or every round-specific challenge.
+The OS gate recognizes Mint 21–23, Ubuntu 22/24/25, and Debian 12/13. Recognition is not end-to-end validation: the earlier full live practice test used System Hardening 7 on Ubuntu 22.04; later changes have focused automated verification. This Linux tool does not handle Windows, Cisco/Packet Tracer, FreeBSD, or every round-specific challenge.
 
 ## Practice and competition rules
 
@@ -46,3 +46,7 @@ The [official challenge table](https://www.uscyberpatriot.org/challenges-and-sco
 Legacy AI modules remain in the source for separately configured practice experiments. `CP_NO_AI=0` explicitly opts out of the default block. Historical documentation is preserved in [docs/LEGACY_AI_WORKFLOW.md](docs/LEGACY_AI_WORKFLOW.md), but its old launch instructions and safety/coverage claims do not describe the current default pipeline.
 
 Based on [gobbler56/cp-linux-auto](https://github.com/gobbler56/cp-linux-auto), with local hardening and validation changes. See [docs/UPSTREAM_README.md](docs/UPSTREAM_README.md) for upstream documentation.
+
+## Coverage and conservative policies
+
+See [the researched coverage inventory](docs/COVERAGE.md) for supported families, partial coverage and missing cases. The kernel baseline preserves unrelated settings, IPv6 and forwarding roles. Existing aggressive settings from older versions require manual review or a clean snapshot. Firewall planning uses standard declared-service ports and stops on unknown/dynamic services or conflicting global denies. Custom ports, source-specific ACLs and application connectivity still require validation. Use the VM console; sudo can remove SSH connection metadata.

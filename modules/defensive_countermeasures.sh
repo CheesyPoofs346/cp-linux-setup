@@ -38,13 +38,13 @@ configure_ufw_defaults() {
 
     # Set default policies: deny incoming, allow outgoing, deny routed
     log_info "Setting default policy: deny incoming"
-    ufw default deny incoming >/dev/null 2>&1
+    ufw default deny incoming >/dev/null 2>&1 || return 1
 
     log_info "Setting default policy: allow outgoing"
-    ufw default allow outgoing >/dev/null 2>&1
+    ufw default allow outgoing >/dev/null 2>&1 || return 1
 
     log_info "Setting default policy: deny routed"
-    ufw default deny routed >/dev/null 2>&1
+    ufw default deny routed >/dev/null 2>&1 || return 1
 
     log_success "UFW default policies configured"
     return 0
@@ -56,16 +56,16 @@ configure_loopback() {
 
     # Allow all traffic on loopback interface
     log_info "Allowing traffic on loopback interface (lo)"
-    ufw allow in on lo >/dev/null 2>&1
-    ufw allow out on lo >/dev/null 2>&1
+    ufw allow in on lo >/dev/null 2>&1 || return 1
+    ufw allow out on lo >/dev/null 2>&1 || return 1
 
     # Deny all traffic from loopback network interface (IPv4)
     log_info "Denying traffic from 127.0.0.0/8 not on loopback"
-    ufw deny in from 127.0.0.0/8 >/dev/null 2>&1
+    ufw deny in from 127.0.0.0/8 >/dev/null 2>&1 || return 1
 
     # Deny all traffic from loopback network interface (IPv6)
     log_info "Denying traffic from ::1 not on loopback"
-    ufw deny in from ::1 >/dev/null 2>&1
+    ufw deny in from ::1 >/dev/null 2>&1 || return 1
 
     log_success "Loopback rules configured"
     return 0
@@ -73,18 +73,11 @@ configure_loopback() {
 
 # Configure SSH rate limiting
 configure_ssh_rate_limit() {
-    log_section "Configuring SSH Rate Limiting"
-
-    # First, remove any existing SSH rules to avoid conflicts
-    ufw --force delete allow 22/tcp >/dev/null 2>&1
-    ufw --force delete allow ssh >/dev/null 2>&1
-
-    # Rate limit SSH connections to prevent brute-force attacks
-    log_info "Enabling SSH rate limiting on port 22/tcp"
-    ufw limit 22/tcp >/dev/null 2>&1
-
-    log_success "SSH rate limiting configured"
-    return 0
+    local port="${SSH_PORT:-22}"
+    grep -Fxq -- "$port/tcp" <<< "${FIREWALL_PORT_PLAN:-}" || return 0
+    ufw --force delete allow "$port/tcp" >/dev/null 2>&1 || true
+    ufw limit "$port/tcp" >/dev/null 2>&1 || return 1
+    log_success "SSH rate limiting configured on $port/tcp"
 }
 
 # Enable UFW logging
@@ -93,7 +86,7 @@ enable_ufw_logging() {
 
     # Set logging to high level for better visibility
     log_info "Setting UFW logging level to high"
-    ufw logging high >/dev/null 2>&1
+    ufw logging high >/dev/null 2>&1 || return 1
 
     log_success "UFW logging enabled at high level"
     return 0
@@ -101,67 +94,41 @@ enable_ufw_logging() {
 
 # Ensure IPv6 is properly configured in UFW
 configure_ipv6_parity() {
-    log_section "Configuring IPv6 Parity"
-
-    # Check if IPv6 is enabled on the system
-    local ipv6_enabled=0
-    if [[ -f /proc/net/if_inet6 ]] && [[ -s /proc/net/if_inet6 ]]; then
-        ipv6_enabled=1
-        log_info "IPv6 is enabled on this system"
-    else
-        log_info "IPv6 is not enabled on this system"
-    fi
-
-    # Ensure UFW is configured to handle IPv6
-    if [[ -f "$UFW_DEFAULT" ]]; then
-        if grep -q "^IPV6=yes" "$UFW_DEFAULT"; then
-            log_success "UFW IPv6 support is enabled"
+    local defaults="${1:-$UFW_DEFAULT}"
+    [[ -f "$defaults" ]] || { log_error "Missing UFW defaults file"; return 1; }
+    if ! grep -q '^IPV6=yes$' "$defaults"; then
+        backup_file "$defaults" || return 1
+        if grep -q '^IPV6=' "$defaults"; then
+            sed -i 's/^IPV6=.*/IPV6=yes/' "$defaults" || return 1
         else
-            log_info "Enabling UFW IPv6 support"
-            sed -i 's/^IPV6=.*/IPV6=yes/' "$UFW_DEFAULT" 2>/dev/null || \
-                echo "IPV6=yes" >> "$UFW_DEFAULT"
-            log_success "UFW IPv6 support enabled"
+            printf '\nIPV6=yes\n' >> "$defaults" || return 1
         fi
     fi
-
-    return 0
+    grep -q '^IPV6=yes$' "$defaults" || return 1
+    log_success "UFW IPv6 support enabled"
 }
 
-# Explicitly allow ports for README critical services
+# Plan only declared, supported services before changing firewall policy.
+build_critical_port_plan() {
+    FIREWALL_PORT_PLAN=$(printf '%s' "${README_DATA:-}" | SSH_PORT="${SSH_PORT:-22}" python3 -I "$SCRIPT_DIR/../lib/firewall_policy.py") || return $?
+}
+
+verify_existing_firewall_rules() {
+    local existing
+    existing=$(ufw show added 2>/dev/null) || { log_error "Cannot inspect existing UFW rules"; return 2; }
+    printf '%s' "$existing" | python3 -I "$SCRIPT_DIR/../lib/firewall_policy.py" --check-rules "$FIREWALL_PORT_PLAN" || return 2
+}
+
 allow_critical_services_ports() {
     log_section "Configuring Firewall Rules for Critical Services"
-    local -a crit_services=()
-    if [[ -n "${README_DATA:-}" ]] && command_exists jq; then
-        mapfile -t crit_services < <(echo "$README_DATA" | jq -r '.critical_services[]?' 2>/dev/null || true)
-    fi
-
-    for svc in "${crit_services[@]}"; do
-        local s="${svc,,}"
-        case "$s" in
-            *ssh*)
-                ufw allow 22/tcp >/dev/null 2>&1
-                log_success "Allowed port 22/tcp for critical service: $svc"
-                ;;
-            *http*|*apache*|*nginx*)
-                ufw allow 80/tcp >/dev/null 2>&1
-                ufw allow 443/tcp >/dev/null 2>&1
-                log_success "Allowed ports 80/tcp, 443/tcp for critical service: $svc"
-                ;;
-            *ftp*)
-                ufw allow 21/tcp >/dev/null 2>&1
-                log_success "Allowed port 21/tcp for critical service: $svc"
-                ;;
-            *mysql*|*mariadb*)
-                ufw allow 3306/tcp >/dev/null 2>&1
-                log_success "Allowed port 3306/tcp for critical service: $svc"
-                ;;
-            *samba*|*smb*)
-                ufw allow 445/tcp >/dev/null 2>&1
-                ufw allow 139/tcp >/dev/null 2>&1
-                log_success "Allowed ports 445/tcp, 139/tcp for critical service: $svc"
-                ;;
-        esac
-    done
+    build_critical_port_plan || return $?
+    verify_existing_firewall_rules || return $?
+    local port
+    while IFS= read -r port; do
+        [[ -n "$port" ]] || continue
+        ufw allow "$port" >/dev/null 2>&1 || { log_error "Failed to allow required port: $port"; return 1; }
+        log_success "Allowed declared-service default port: $port"
+    done <<< "$FIREWALL_PORT_PLAN"
 }
 
 # Deny unnecessary and unused ports
@@ -208,29 +175,10 @@ deny_unnecessary_ports() {
         fi
     }
 
-    local is_critical_port=0
+    build_critical_port_plan || return $?
     for port_proto in "${unnecessary_ports[@]}"; do
-        is_critical_port=0
-        case "$port_proto" in
-            "80/tcp")
-                if echo "${README_DATA:-}" | jq -e '.critical_services[]? | select(. == "apache2" or . == "nginx" or . == "httpd")' >/dev/null 2>&1; then
-                    is_critical_port=1
-                fi
-                ;;
-            "21/tcp")
-                if echo "${README_DATA:-}" | jq -e '.critical_services[]? | select(. == "ftp" or . == "vsftpd" or . == "proftpd" or . == "pure-ftpd")' >/dev/null 2>&1; then
-                    is_critical_port=1
-                fi
-                ;;
-            "445/tcp")
-                if echo "${README_DATA:-}" | jq -e '.critical_services[]? | select(. == "samba" or . == "smbd")' >/dev/null 2>&1; then
-                    is_critical_port=1
-                fi
-                ;;
-        esac
-
-        if (( is_critical_port )); then
-            log_info "Port $port_proto is required by critical service in README; skipping deny rule"
+        if grep -Fxq -- "$port_proto" <<< "$FIREWALL_PORT_PLAN"; then
+            log_info "Preserving declared-service port: $port_proto"
             continue
         fi
 
@@ -244,7 +192,7 @@ deny_unnecessary_ports() {
             log_info "Deny rule for $port_proto already exists"
         else
             log_info "Denying unused port $port_proto"
-            ufw deny "$port_proto" >/dev/null 2>&1
+            ufw deny "$port_proto" >/dev/null 2>&1 || return 1
         fi
     done
 
@@ -258,11 +206,11 @@ enable_ufw() {
 
     # Enable UFW (will auto-start on boot)
     log_info "Enabling UFW and setting to start at boot"
-    echo "y" | ufw enable >/dev/null 2>&1
+    ufw --force enable >/dev/null 2>&1 || return 1
 
     # Ensure UFW service is enabled at boot
     if command_exists systemctl; then
-        systemctl enable ufw >/dev/null 2>&1
+        systemctl enable ufw >/dev/null 2>&1 || return 1
         log_success "UFW enabled and set to start at boot"
     else
         log_success "UFW enabled"
@@ -282,14 +230,16 @@ verify_ufw_status() {
     if echo "$status_output" | grep -q "Status: active"; then
         log_success "UFW is active"
     else
-        log_warn "UFW may not be active"
+        log_error "UFW is not active"
+        return 1
     fi
 
     # Check default policies
     if echo "$status_output" | grep -q "deny (incoming)"; then
         log_success "Default incoming: deny"
     else
-        log_warn "Default incoming policy may not be set to deny"
+        log_error "Default incoming policy is not deny"
+        return 1
     fi
 
     if echo "$status_output" | grep -q "allow (outgoing)"; then
@@ -325,6 +275,8 @@ verify_ufw_status() {
 run_defensive_countermeasures() {
     log_info "Starting Defensive Countermeasures module..."
 
+    build_critical_port_plan || return $?
+
     # Prevent errexit from terminating the interactive engine if a single UFW command fails
     local had_errexit=0
     if [[ $- == *e* ]]; then
@@ -339,16 +291,15 @@ run_defensive_countermeasures() {
         log_error "Cannot proceed without UFW installed"
         status=1
     else
-        # Configure UFW step by step
-        configure_ufw_defaults
-        configure_loopback
-        enable_ufw_logging
-        configure_ipv6_parity
-        configure_ssh_rate_limit
-        allow_critical_services_ports
-        deny_unnecessary_ports
-        enable_ufw
-        verify_ufw_status
+        # Install required allows before changing defaults, then verify activation.
+        local step
+        for step in verify_existing_firewall_rules configure_ipv6_parity configure_loopback enable_ufw_logging allow_critical_services_ports configure_ssh_rate_limit configure_ufw_defaults deny_unnecessary_ports enable_ufw verify_ufw_status; do
+            if ! "$step"; then
+                log_error "Firewall configuration failed at $step"
+                status=1
+                break
+            fi
+        done
 
         # Enforce AppArmor and Auditd if present
         if command_exists aa-enforce; then

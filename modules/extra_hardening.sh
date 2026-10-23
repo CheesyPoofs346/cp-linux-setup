@@ -289,49 +289,10 @@ extra_shell_profile() {
     extra_fixed "Shell idle timeout + umask 027 ($f)"
 }
 
-# Network/kernel sysctls; one idempotent drop-in.
+# The security module and extra hardening use the same owned baseline.
 extra_sysctl_extra() {
-    local f=/etc/sysctl.d/99-cp-extra.conf other key
-    [[ -d /etc/sysctl.d ]] || return 0
-    # a planted drop-in or sysctl.conf line that re-enables forwarding/redirects scores as a vuln even if ours wins
-    for key in net.ipv4.ip_forward net.ipv6.conf.all.forwarding net.ipv4.conf.all.accept_redirects net.ipv4.conf.all.send_redirects                net.ipv4.conf.all.accept_source_route net.ipv4.tcp_syncookies kernel.randomize_va_space kernel.sysrq; do
-        for other in /etc/sysctl.conf /etc/sysctl.d/*.conf /usr/lib/sysctl.d/*.conf; do
-            [[ "$other" == "$f" || ! -f "$other" ]] && continue
-            grep -Eq "^[[:space:]]*${key//./\.}[[:space:]]*=[[:space:]]*(1|2)" "$other" || continue
-            case "$key" in net.ipv4.tcp_syncookies) continue ;; kernel.randomize_va_space) grep -Eq "=[[:space:]]*2" "$other" && continue ;; esac
-            [[ "$other" == /usr/lib/* ]] && continue
-            extra_comment_matching "$other" "^[[:space:]]*${key//./\.}[[:space:]]*=" "Removed conflicting sysctl $key"
-        done
-    done
-    [[ -f "$f" ]] && return 0
-    cat > "$f" <<'SYSCTL'
-net.ipv4.ip_forward = 0
-net.ipv6.conf.all.forwarding = 0
-net.ipv4.tcp_syncookies = 1
-net.ipv4.tcp_max_syn_backlog = 2048
-net.ipv4.conf.all.accept_source_route = 0
-net.ipv4.conf.default.accept_source_route = 0
-net.ipv4.conf.all.send_redirects = 0
-net.ipv4.conf.default.send_redirects = 0
-net.ipv4.conf.all.accept_redirects = 0
-net.ipv4.conf.default.accept_redirects = 0
-net.ipv4.conf.all.secure_redirects = 0
-net.ipv4.icmp_echo_ignore_broadcasts = 1
-net.ipv4.icmp_ignore_bogus_error_responses = 1
-net.ipv4.conf.all.rp_filter = 1
-net.ipv4.conf.all.log_martians = 1
-net.ipv6.conf.all.accept_redirects = 0
-net.ipv6.conf.default.accept_redirects = 0
-kernel.randomize_va_space = 2
-kernel.sysrq = 0
-fs.suid_dumpable = 0
-fs.protected_hardlinks = 1
-fs.protected_symlinks = 1
-kernel.dmesg_restrict = 1
-kernel.kptr_restrict = 2
-SYSCTL
-    sysctl --system >/dev/null 2>&1 || true
-    extra_fixed "Extra sysctl hardening written ($f)"
+    python3 -I "$SCRIPT_DIR/../lib/kernel_policy.py" || return 1
+    extra_fixed "Shared kernel baseline applied and verified"
 }
 
 # Scoring reads the stock files, not our later drop-ins: fix the originals too (only when the server exists).
@@ -402,7 +363,7 @@ run_extra_hardening() {
     extra_web_direct
     extra_update_settings
     extra_shell_profile
-    extra_sysctl_extra
+    extra_sysctl_extra || return 1
     log_success "Extra hardening complete ($EXTRA_FIXES change(s))"
     return 0
 }

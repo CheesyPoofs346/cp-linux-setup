@@ -1,0 +1,694 @@
+{
+  "date": "2026-10-23",
+  "scope": "Public released training and original simulator sources; no active-round keys or gated resources.",
+  "counts": {
+    "partial": 44,
+    "review": 4,
+    "implemented": 3,
+    "missing": 4,
+    "outside-linux": 3
+  },
+  "sources": [
+    {
+      "id": "T1",
+      "title": "Official CyberPatriot public training materials",
+      "url": "https://www.uscyberpatriot.org/training-materials/",
+      "scope": "Official category/resource index; not a complete current-round rubric. Public materials only."
+    },
+    {
+      "id": "T2",
+      "title": "Official archived training modules",
+      "url": "https://www.uscyberpatriot.org/archived-training-modules/",
+      "scope": "Historical Ubuntu training is useful for concepts; old PAM commands are not current portable instructions."
+    },
+    {
+      "id": "P1",
+      "title": "PySEL original practice scoring configuration",
+      "url": "https://github.com/FWSquatch/pysel/blob/master/PySEL.conf",
+      "scope": "Generic author-released practice checks; not an official CyberPatriot answer key."
+    },
+    {
+      "id": "A1",
+      "title": "Aeacus original check documentation",
+      "url": "https://github.com/elysium-suite/aeacus/blob/master/docs/checks.md",
+      "scope": "Scorer check capabilities, not evidence that every check appears in a round."
+    },
+    {
+      "id": "S1",
+      "title": "Aperture Science original practice bundle",
+      "url": "https://github.com/anishgoyal1108/Aperture-Science-Practice-Image-Bundle",
+      "scope": "Author describes difficult practice images. External VM/key links were not downloaded or independently verified."
+    },
+    {
+      "id": "S2",
+      "title": "CyberPatriot Toolkit original Linux test harness",
+      "url": "https://github.com/Ripper1004/CyberPatriot-Toolkit/blob/main/tests/linux/run-tests.sh",
+      "scope": "Public test source reference; its distribution-matrix claims were not independently executed here."
+    },
+    {
+      "id": "K1",
+      "title": "Linux kernel sysctl documentation",
+      "url": "https://www.kernel.org/doc/html/latest/admin-guide/sysctl/kernel.html",
+      "scope": "Upstream meaning and compatibility caveats for kernel settings."
+    },
+    {
+      "id": "K2",
+      "title": "Linux kernel IP sysctl documentation",
+      "url": "https://www.kernel.org/doc/html/latest/networking/ip-sysctl.html",
+      "scope": "Networking role dependence; do not blindly apply a desktop policy to routers."
+    }
+  ],
+  "families": [
+    {
+      "family": "README accounts, roles and hires",
+      "coverage": "partial",
+      "implementation": "lib/readme_extract.py",
+      "limit": "Explicit supported headings/lists; arbitrary narrative remains ambiguous.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "Unauthorized users and administrator membership",
+      "coverage": "partial",
+      "implementation": "modules/user_auditing.sh",
+      "limit": "Operator account protected; system/service accounts and unusual identity providers need review.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "Extra UID 0 accounts and account anomalies",
+      "coverage": "partial",
+      "implementation": "lib/sentinel.py",
+      "limit": "Local account checks; domain/LDAP identity is not covered.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "Supplementary groups and role changes",
+      "coverage": "partial",
+      "implementation": "modules/user_auditing.sh",
+      "limit": "README-derived local policy; custom groups may need review.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "Password changes, empty passwords and aging",
+      "coverage": "partial",
+      "implementation": "modules/account_policy.sh",
+      "limit": "Broad local policy; authentication must be checked on the target image.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "PAM quality and password history",
+      "coverage": "partial",
+      "implementation": "modules/account_policy.sh",
+      "limit": "Module availability and PAM order differ by distribution and release.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "PAM bypass and authentication tampering",
+      "coverage": "partial",
+      "implementation": "lib/sentinel.py",
+      "limit": "Known patterns; arbitrary malicious modules and control-flow changes are not fully detected.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "Login lockout and failure counters",
+      "coverage": "partial",
+      "implementation": "modules/local_policy.sh",
+      "limit": "Legacy tally2 versus faillock differences need image-specific validation.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "Guest login, autologin and desktop locking",
+      "coverage": "partial",
+      "implementation": "modules/os_settings.sh",
+      "limit": "Display managers and desktops differ; only SH7 desktop has live evidence.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "Sudoers privilege and NOPASSWD policy",
+      "coverage": "partial",
+      "implementation": "modules/security_policy.sh",
+      "limit": "Custom delegation needs requirements review and syntax validation.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "SSH daemon configuration",
+      "coverage": "partial",
+      "implementation": "modules/ssh_hardening.sh",
+      "limit": "Includes operator safeguards; settings, Match blocks and authentication must be validated live.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "SSH authorized keys",
+      "coverage": "review",
+      "implementation": "lib/sentinel.py",
+      "limit": "Unknown keys require an ownership/authorization decision; no blind deletion.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "SSH ports and remote operator preservation",
+      "coverage": "partial",
+      "implementation": "lib/firewall_policy.py",
+      "limit": "Preserves declared connection port when SSH_CONNECTION is supplied; sudo may strip it. Use VM console.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "FTP security and passive data ports",
+      "coverage": "partial",
+      "implementation": "modules/ftp_hardening.sh",
+      "limit": "Control port known; passive ranges and TLS/application behavior need explicit configuration.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "Apache web-server settings",
+      "coverage": "partial",
+      "implementation": "modules/apache_hardening.sh",
+      "limit": "Generic directives do not validate applications, virtual hosts or certificates.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "nginx settings",
+      "coverage": "partial",
+      "implementation": "modules/nginx_hardening.sh",
+      "limit": "Absent service skipped; complex site configurations require review.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "PHP settings",
+      "coverage": "partial",
+      "implementation": "modules/php_hardening.sh",
+      "limit": "Absent PHP skipped; version and application compatibility remain image-specific.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "PostgreSQL authentication and permissions",
+      "coverage": "partial",
+      "implementation": "modules/postgres_hardening.sh",
+      "limit": "Generic hardening can affect extensions/apps; no universal database application test.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "MySQL/MariaDB security",
+      "coverage": "partial",
+      "implementation": "modules/mysql_hardening.sh",
+      "limit": "Actual credentials, grants and application connectivity need verification.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "Samba share security",
+      "coverage": "partial",
+      "implementation": "modules/samba_hardening.sh",
+      "limit": "Custom share ACLs, domain roles and client access need review.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "DNS and mail-server settings",
+      "coverage": "partial",
+      "implementation": "modules/extra_hardening.sh",
+      "limit": "Selected directives and standard firewall ports; not complete DNS/mail deployment validation.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "NFS/RPC server roles",
+      "coverage": "review",
+      "implementation": "lib/firewall_policy.py",
+      "limit": "Dynamic/unknown service requirements stop firewall planning; exports and RPC roles require manual review.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "SNMP communities and access control",
+      "coverage": "review",
+      "implementation": "lib/firewall_policy.py",
+      "limit": "Standard port mapping is not SNMP authentication or community hardening.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "Required-service preservation",
+      "coverage": "partial",
+      "implementation": "lib/utils.sh",
+      "limit": "Aliases/dependencies guarded; running service does not prove end-to-end reachability.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "Prohibited packages and services",
+      "coverage": "partial",
+      "implementation": "modules/unwanted_software.sh",
+      "limit": "Known lists and README exceptions; custom binaries and disguised packages can remain.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "OS and security package updates",
+      "coverage": "partial",
+      "implementation": "modules/os_updates.sh",
+      "limit": "SH7 update/reboot evidence exists for an earlier revision; repositories and failures vary.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "APT sources and trust",
+      "coverage": "partial",
+      "implementation": "modules/extra_hardening.sh",
+      "limit": "Selected source/security checks; not complete repository-signature provenance verification.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "UFW defaults, required ports and conflicting rules",
+      "coverage": "partial",
+      "implementation": "lib/firewall_policy.py",
+      "limit": "Unknown services/global conflicting denies stop for review. Source-specific ACLs and live connectivity are not certified.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "IPv6, forwarding and router/server roles",
+      "coverage": "review",
+      "implementation": "lib/kernel_policy.py",
+      "limit": "Preserved for compatibility; role-specific values must come from image requirements.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "Conservative kernel protections",
+      "coverage": "implemented",
+      "implementation": "lib/kernel_policy.py",
+      "limit": "Ten supported keys, write/readback verification and backups; not a complete sysctl policy.",
+      "sources": [
+        "K1",
+        "K2"
+      ]
+    },
+    {
+      "family": "Account/system file ownership and modes",
+      "coverage": "partial",
+      "implementation": "modules/os_settings.sh",
+      "limit": "Selected paths; custom ownership and mount semantics can differ.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "Log directory permissions",
+      "coverage": "implemented",
+      "implementation": "modules/os_settings.sh",
+      "limit": "Corrects /var/log root directory to root:root 0755; does not certify every log file ACL.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "SUID/SGID executables",
+      "coverage": "partial",
+      "implementation": "lib/sentinel.py",
+      "limit": "Selected findings; unusual legitimate executables and arbitrary binaries need review.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "World-writable files/directories",
+      "coverage": "partial",
+      "implementation": "modules/os_settings.sh",
+      "limit": "Broad checks are not a safe universal permission policy for application data.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "POSIX ACL abuse",
+      "coverage": "missing",
+      "implementation": "",
+      "limit": "No complete ACL inventory/remediation policy; inspect getfacl and legitimate access requirements.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "File capability abuse",
+      "coverage": "missing",
+      "implementation": "",
+      "limit": "No complete getcap inventory or application-aware setcap remediation.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "Immutable attributes",
+      "coverage": "partial",
+      "implementation": "modules/malware.sh",
+      "limit": "Selected handling; legitimate immutable settings and unusual files need review.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "Hosts mappings and local name resolution",
+      "coverage": "implemented",
+      "implementation": "modules/os_settings.sh",
+      "limit": "Preserves custom mappings and adds missing localhost/hostname entries; malicious mappings still require review.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "Cron persistence",
+      "coverage": "partial",
+      "implementation": "lib/sentinel.py",
+      "limit": "Known suspicious command patterns; arbitrary benign-looking jobs need investigation.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "systemd units, timers and user autostart",
+      "coverage": "partial",
+      "implementation": "lib/anomaly_audit.py",
+      "limit": "Bounded evidence inventory; arbitrary persistence is not automatically classified.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "LD preload and injected libraries",
+      "coverage": "partial",
+      "implementation": "modules/malware.sh",
+      "limit": "Known/missing suspicious entries; not a complete rootkit detector.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "Shell aliases and startup hijacks",
+      "coverage": "partial",
+      "implementation": "lib/sentinel.py",
+      "limit": "Known alias/startup patterns; obfuscation and application launchers can evade rules.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "Unexpected listeners and processes",
+      "coverage": "partial",
+      "implementation": "lib/anomaly_audit.py",
+      "limit": "Inventory is evidence, not proof of maliciousness; no automatic universal kill policy.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "Web shells and malicious scripts",
+      "coverage": "partial",
+      "implementation": "modules/malware.sh",
+      "limit": "Pattern-based detection; arbitrary obfuscated application code requires analysis.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "Package integrity and altered binaries",
+      "coverage": "partial",
+      "implementation": "modules/malware.sh",
+      "limit": "Selected checks; no comprehensive trusted reinstallation of every modified executable.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "Prohibited media/files",
+      "coverage": "partial",
+      "implementation": "modules/prohibited_files.sh",
+      "limit": "Requirements and forensic evidence determine whether deletion is appropriate.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "Explicit file hash and Base64 forensics",
+      "coverage": "partial",
+      "implementation": "lib/forensics_det.py",
+      "limit": "Bounded named-file tasks tested; arbitrary transformations and evidence layouts are not supported.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "Hidden-user and UID forensic questions",
+      "coverage": "partial",
+      "implementation": "lib/forensics_det.py",
+      "limit": "Supported deterministic templates; not arbitrary natural-language question solving.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "PAM/backdoor forensic questions",
+      "coverage": "partial",
+      "implementation": "lib/forensics_det.py",
+      "limit": "Answers require unique supported evidence; ambiguity stops before cleanup.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "IP attribution and historical timelines",
+      "coverage": "partial",
+      "implementation": "lib/forensics_det.py",
+      "limit": "Some evidence lookups; current DNS is not historical proof. Multi-log timelines require investigation.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "Memory, encrypted evidence, steganography and multi-stage forensics",
+      "coverage": "missing",
+      "implementation": "",
+      "limit": "No general solver; preserve evidence and investigate manually.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "Bootloader/GRUB settings",
+      "coverage": "partial",
+      "implementation": "modules/os_settings.sh",
+      "limit": "Image-specific boot and recovery requirements can conflict with generic policy.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "AppArmor profiles",
+      "coverage": "partial",
+      "implementation": "modules/defensive_countermeasures.sh",
+      "limit": "Generic enforcement does not prove application compatibility or complete profile coverage.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "Audit and system logging",
+      "coverage": "partial",
+      "implementation": "modules/defensive_countermeasures.sh",
+      "limit": "Selected enablement; not a complete audit policy or remote log validation.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "Custom applications, CMS, TLS and business configuration",
+      "coverage": "missing",
+      "implementation": "",
+      "limit": "No universal safe application policy; derive from README and vendor documentation.",
+      "sources": [
+        "T1",
+        "P1",
+        "A1"
+      ]
+    },
+    {
+      "family": "Windows and Active Directory",
+      "coverage": "outside-linux",
+      "implementation": "",
+      "limit": "This repository is Linux-only; Windows/AD need separate tooling and training.",
+      "sources": [
+        "T1"
+      ]
+    },
+    {
+      "family": "FreeBSD",
+      "coverage": "outside-linux",
+      "implementation": "",
+      "limit": "Linux shell/module assumptions do not cover FreeBSD.",
+      "sources": [
+        "T1"
+      ]
+    },
+    {
+      "family": "Cisco networking and Packet Tracer",
+      "coverage": "outside-linux",
+      "implementation": "",
+      "limit": "Separate networking challenge and configuration workflow.",
+      "sources": [
+        "T1"
+      ]
+    }
+  ]
+}
