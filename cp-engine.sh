@@ -24,7 +24,6 @@ DESIRED_MODULE_ORDER=(
     dependencies
     readme_parser
     forensics_questions
-    os_updates
     user_auditing
     account_policy
     local_policy
@@ -44,6 +43,8 @@ DESIRED_MODULE_ORDER=(
     prohibited_files
     defensive_countermeasures
     os_settings
+    # Last: the full upgrade is the slowest step (network bound); everything scored locally lands first.
+    os_updates
 )
 
 # Remove common formatting issues from module identifiers

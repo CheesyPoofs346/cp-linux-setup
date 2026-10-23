@@ -766,8 +766,8 @@ fix_null_passwords() {
             continue
         fi
 
-        # Check if password field is empty or just contains special markers
-        if [[ -z "$password_field" ]] || [[ "$password_field" == "!" ]] || [[ "$password_field" == "*" ]]; then
+        # Only a truly empty hash is a null password; "!"/"*" mean locked (root is locked on purpose, never unlock it)
+        if [[ -z "$password_field" ]]; then
             log_warn "User $username has no password set"
 
             # Set a password (skip main user as per requirements)
@@ -832,7 +832,8 @@ fix_insecure_passwords() {
 
         if [[ -n "$u" && $is_weak -eq 1 ]]; then
             if [[ "$u" != "$main_user" && "$u" != "$protected_user" && "$u" != "root" ]]; then
-                if user_exists "$u"; then
+                # "name: value" also matches prose ("QUESTION 4: If ..."); only real README accounts count, and id(1) accepts numeric UIDs.
+                if [[ ! "$u" =~ ^[0-9]+$ ]] && echo "$README_DATA" | jq -e --arg u "$u" '.all_users[]? | select((.name | ascii_downcase) == $u)' >/dev/null 2>&1 && user_exists "$u"; then
                     log_warn "User $u has weak password in README ('$p'). Updating..."
                     set_password "$u" "$DEFAULT_PASSWORD"
                     log_success "Updated password for $u to comply with password policy"
@@ -1263,26 +1264,28 @@ run_user_auditing() {
     fi
 
     # Run all auditing functions
-    disable_guest_account
-    fix_root_uid_users                # Fix any non-root users with UID 0 (MUST run early)
-    remove_unauthorized_users
-    remove_hidden_users
-    handle_system_users
-    manage_admin_privileges
-    create_groups
-    create_missing_users
-    add_users_to_groups
-    fix_null_passwords
-    fix_insecure_passwords
-    rotate_authorized_passwords
-    enforce_password_policies
-    check_password_hashing
-    disable_system_user_logins
-
-    # New comprehensive user auditing functions
-    ensure_system_accounts_nologin    # Ensure all system accounts (including root) have nologin
-    ensure_matching_uid_gid           # Ensure all user accounts have matching UID:GID
-    verify_user_account_shells        # Verify user account shells are properly configured
+    # Each step is independent: one failing must never skip the rest (a mid-module abort used to skip password rotation).
+    local step
+    for step in disable_guest_account \
+                fix_root_uid_users \
+                remove_unauthorized_users \
+                remove_hidden_users \
+                handle_system_users \
+                manage_admin_privileges \
+                create_groups \
+                create_missing_users \
+                add_users_to_groups \
+                fix_null_passwords \
+                fix_insecure_passwords \
+                rotate_authorized_passwords \
+                enforce_password_policies \
+                check_password_hashing \
+                disable_system_user_logins \
+                ensure_system_accounts_nologin \
+                ensure_matching_uid_gid \
+                verify_user_account_shells; do
+        "$step" || log_warn "user_auditing step $step failed; continuing"
+    done
 
     log_section "User Auditing Complete"
     log_success "All user auditing tasks completed"

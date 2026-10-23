@@ -44,6 +44,8 @@ extra_autologin() {
             sed -E -i 's/^([[:space:]]*(AutomaticLoginEnable|TimedLoginEnable)[[:space:]]*=[[:space:]]*)(true|True|1)/\1false/' "$f"
             extra_fixed "Disabled GDM automatic login: $f"
         fi
+        # A leftover "AutomaticLogin=user" line still reads as autologin to simple checks.
+        extra_comment_matching "$f" '^[[:space:]]*(AutomaticLogin|TimedLogin)[[:space:]]*=' "Removed GDM autologin user"
     done
 }
 

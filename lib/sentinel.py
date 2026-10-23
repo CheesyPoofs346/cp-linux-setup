@@ -87,12 +87,12 @@ BAD_PACKAGES = (
     'transmission transmission-daemon transmission-qt tuxmath tuxpaint veil vino wesnoth-core wfuzz '
     'wireshark-common x11vnc xboard xrdp zaproxy '
     'chromium-bsu flightgear supertuxkart warzone2100 widelands dosbox pidgin-otr').split()
-DUAL_USE_PACKAGES = 'netcat-openbsd tcpdump socat snort openvpn x11vnc remmina nfs-kernel-server'.split()
+DUAL_USE_PACKAGES = 'netcat-openbsd netcat-traditional ncat tcpdump socat snort openvpn x11vnc remmina nfs-kernel-server'.split()
 SUID_ABUSABLE = set('find vim vim.basic vi nano python python2 python3 perl ruby bash sh dash zsh cp mv less more awk gawk mawk env nmap tar zip '
                     'unzip nc ncat socat php node lua man tee xxd base64 dd cat head tail sed gdb strace ftp wget curl rsync tclsh'.split())
 SUID_DEFAULT_DIRS = ('/usr/bin', '/bin', '/usr/sbin', '/sbin', '/usr/lib', '/usr/libexec', '/usr/local/bin', '/usr/local/sbin', '/opt', '/home', '/tmp', '/var/tmp')
-PROHIBITED_SERVICES = 'telnet.socket telnetd vsftpd proftpd pure-ftpd tftpd-hpa rsh.socket rlogin.socket rexec.socket snmpd nfs-server rpcbind apache2 lighttpd nginx xinetd xrdp x11vnc ypserv ypbind rpc-statd nfs-mountd tightvncserver vncserver'.split()
-AUTO_STOP_SERVICES = set('apache2 nginx lighttpd smbd nmbd bind9 named dovecot postfix squid telnet telnetd vsftpd proftpd pure-ftpd tftpd-hpa rsh rlogin rexec snmpd xinetd xrdp x11vnc ypserv ypbind'.split())
+PROHIBITED_SERVICES = 'telnet.socket telnetd vsftpd proftpd pure-ftpd tftpd-hpa rsh.socket rlogin.socket rexec.socket snmpd nfs-server rpcbind apache2 lighttpd nginx xinetd xrdp x11vnc ypserv ypbind rpc-statd nfs-mountd tightvncserver vncserver openvpn tor privoxy isc-dhcp-server slapd'.split()
+AUTO_STOP_SERVICES = set('openvpn tor privoxy isc-dhcp-server slapd apache2 nginx lighttpd smbd nmbd bind9 named dovecot postfix squid telnet telnetd vsftpd proftpd pure-ftpd tftpd-hpa rsh rlogin rexec snmpd xinetd xrdp x11vnc ypserv ypbind'.split())
 SAFE_STOP_SERVICES = 'avahi-daemon cups cups-browsed bluetooth ModemManager whoopsie kerneloops speech-dispatcher colord geoclue apport'.split()
 FIREFOX_PREFS = [
     'user_pref("dom.disable_open_during_load", true);',
@@ -224,7 +224,10 @@ def scan(ctx):
         if pkg in BAD_PACKAGES and not ctx.mentioned(pkg) and not PROTECT_RE.search(pkg):
             add('hacking-package', f'{pkg} is a prohibited hacking tool/game', ('purge', pkg), 'auto')
         elif pkg in DUAL_USE_PACKAGES and not ctx.mentioned(pkg):
-            add('dual-use-package', f'{pkg} is dual-use; remove unless the README needs it', ('purge', pkg))
+            # Network-sniffing/shell tools are plain "hacking tools" once the README forbids them; remote-access ones stay a judgment call.
+            forbids = pkg in 'netcat-openbsd netcat-traditional ncat tcpdump socat snort'.split() and \
+                re.search(r'hacking|penetration|prohibited (software|programs|tools)|unauthori[sz]ed (software|programs|tools)|no games', ctx.readme_text)
+            add('dual-use-package', f'{pkg} is dual-use; remove unless the README needs it', ('purge', pkg), 'auto' if forbids else 'review')
 
     # --- auto: abusable SUID binaries
     try:
@@ -429,7 +432,7 @@ def scan(ctx):
             if 'cp-linux-setup' in rel or PROTECT_RE.search(rel) or ctx.engine_dir.resolve() in Path(ctx.p(rel)).resolve().parents:
                 continue
             add('backdoor-file', f'{rel} is not part of any package: {why}', ('rm', rel), 'auto' if score >= 10 else 'review')
-    except (ImportError, OSError, ValueError):
+    except Exception:  # an optional scanner must never take the sentinel down
         pass
     # --- media files (README forbids them): audio/video always, pictures in the user's own folders
     media_ext = {'.mp3', '.mp4', '.m4a', '.m4v', '.aac', '.ogg', '.oga', '.opus', '.wav', '.flac', '.wma', '.wmv', '.avi', '.mkv', '.mov', '.webm', '.mpg', '.mpeg', '.flv'}
