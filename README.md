@@ -37,7 +37,7 @@ The OS gate recognizes Mint 21–23, Ubuntu 22/24/25, and Debian 12/13. Recognit
 
 ## Practice and competition rules
 
-The [official rules book](https://www.uscyberpatriot.org/documents/rules-book) controls competition use. CP19 section 3010.4 prohibits AI-created programs during competition, including programs created before the round. Turning off AI calls does not change the program's authorship. Treat this AI-assisted revision as practice material.
+The [official rules book](https://www.uscyberpatriot.org/rules-book/) controls competition use. CP19 section 3010.4 prohibits AI-created programs during competition, including programs created before the round. Turning off AI calls does not change the program's authorship. Treat this AI-assisted revision as practice material.
 
 The [official challenge table](https://www.uscyberpatriot.org/challenges-and-scoring-values/) varies by round, division, and tier. Always use the current image README and round instructions; do not assume an SH7 result transfers to another image.
 
