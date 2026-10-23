@@ -301,6 +301,8 @@ configure_password_hashing() {
         sed -i "s/\(pam_unix.so[^#]*\)\(sha512\|yescrypt\|md5\|des\)/\1/" "$pam_file"
         # Add the secure hash algorithm
         sed -i "s/\(pam_unix.so\)/\1 $hash_algo/" "$pam_file"
+        # a stray minlen on pam_unix weakens the policy (pam_pwquality owns length)
+        sed -i -E '/pam_unix\.so/ s/[[:space:]]+minlen=[0-9]+//g' "$pam_file"
         log_success "Configured password hashing to use $hash_algo in PAM"
     fi
 
@@ -643,27 +645,27 @@ run_account_policy() {
     require_root
 
     # Run non-PAM or non-conflicting configs first
-    configure_login_defs              # Items 23, 24
-    configure_pwquality               # Items 26, 27, 28, 29 (sets up /etc/security/pwquality.conf)
-    lock_root_account_if_blank        # Item 35
-    disable_user_enumeration          # Item 34
+        configure_login_defs || log_warn "    configure_login_defs reported a problem; continuing"              # Items 23, 24
+        configure_pwquality || log_warn "    configure_pwquality reported a problem; continuing"               # Items 26, 27, 28, 29 (sets up /etc/security/pwquality.conf)
+        lock_root_account_if_blank || log_warn "    lock_root_account_if_blank reported a problem; continuing"        # Item 35
+        disable_user_enumeration || log_warn "    disable_user_enumeration reported a problem; continuing"          # Item 34
 
     # --- PAM Configuration Block ---
     # Run pam-auth-update (faillock) FIRST to establish the PAM baseline
     # This regenerates common-auth and common-account
-    configure_account_lockout         # Item 33 (NEW VERSION)
+        configure_account_lockout || log_warn "    configure_account_lockout reported a problem; continuing"         # Item 33 (NEW VERSION)
 
     # Now, apply all direct PAM edits on top of the new baseline
     # These functions primarily edit common-password, which is less
     # likely to be overwritten by the faillock update, but this
     # is the safest order.
-    enable_pwquality_pam              # Enable pwquality in /etc/pam.d/common-password
-    configure_password_history        # Item 25 (edits /etc/pam.d/common-password)
-    configure_password_hashing        # Item 30 (edits /etc/pam.d/common-password)
+        enable_pwquality_pam || log_warn "    enable_pwquality_pam reported a problem; continuing"              # Enable pwquality in /etc/pam.d/common-password
+        configure_password_history || log_warn "    configure_password_history reported a problem; continuing"        # Item 25 (edits /etc/pam.d/common-password)
+        configure_password_hashing || log_warn "    configure_password_hashing reported a problem; continuing"        # Item 30 (edits /etc/pam.d/common-password)
     
     # Run disable_null_passwords LAST to ensure nullok is removed
     # from the newly regenerated common-auth and from common-password.
-    disable_null_passwords            # Items 31, 32 (edits common-auth, common-password)
+        disable_null_passwords || log_warn "    disable_null_passwords reported a problem; continuing"            # Items 31, 32 (edits common-auth, common-password)
 
     # Verify that we didn't break PAM
     if ! verify_pam_integrity; then

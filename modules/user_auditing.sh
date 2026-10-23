@@ -201,12 +201,12 @@ remove_unauthorized_users() {
         # This is an unauthorized user
         log_warn "Found unauthorized user: $current_user"
 
-        if userdel -r "$current_user" 2>/dev/null; then
+        if safe_userdel -r "$current_user"; then
             log_success "Removed unauthorized user: $current_user"
             removed_count=$((removed_count + 1))
         else
             # Try without removing home directory
-            if userdel "$current_user" 2>/dev/null; then
+            if safe_userdel "$current_user"; then
                 log_success "Removed unauthorized user (kept home): $current_user"
                 removed_count=$((removed_count + 1))
             else
@@ -275,12 +275,12 @@ fix_root_uid_users() {
         else
             # User is not authorized and has UID 0 - remove them
             log_warn "Removing unauthorized user with UID 0: $username"
-            if userdel -r "$username" 2>/dev/null; then
+            if safe_userdel -r "$username"; then
                 log_success "Removed unauthorized user with UID 0: $username"
                 log_score 3 "Removed non-root user with UID 0: $username"
                 fixed_count=$((fixed_count + 1))
             else
-                if userdel "$username" 2>/dev/null; then
+                if safe_userdel "$username"; then
                     log_success "Removed unauthorized user with UID 0 (kept home): $username"
                     log_score 3 "Removed non-root user with UID 0: $username"
                     fixed_count=$((fixed_count + 1))
@@ -334,11 +334,11 @@ remove_hidden_users() {
         # This is a hidden user
         log_warn "Found hidden user: $username (UID: $uid)"
 
-        if userdel -r "$username" 2>/dev/null; then
+        if safe_userdel -r "$username"; then
             log_success "Removed hidden user: $username"
             removed_count=$((removed_count + 1))
         else
-            if userdel "$username" 2>/dev/null; then
+            if safe_userdel "$username"; then
                 log_success "Removed hidden user (kept home): $username"
                 removed_count=$((removed_count + 1))
             else
@@ -396,11 +396,11 @@ handle_system_users() {
         else
             # Not a critical system account and not authorized - remove it
             log_warn "Removing unauthorized user: $username"
-            if userdel -r "$username" 2>/dev/null; then
+            if safe_userdel -r "$username"; then
                 log_success "Removed user: $username"
                 restricted_count=$((restricted_count + 1))
             else
-                if userdel "$username" 2>/dev/null; then
+                if safe_userdel "$username"; then
                     log_success "Removed user (kept home): $username"
                     restricted_count=$((restricted_count + 1))
                 else
@@ -626,7 +626,7 @@ create_missing_users() {
             log_success "Created user account: $username"
 
             # Set initial password
-            echo "$username:$DEFAULT_PASSWORD" | chpasswd
+            set_password "$username" "$DEFAULT_PASSWORD"
 
             # Force password change on first login
             passwd -e "$username" 2>/dev/null
@@ -772,7 +772,7 @@ fix_null_passwords() {
 
             # Set a password (skip main user as per requirements)
             if [[ "$username" != "$main_user" ]]; then
-                echo "$username:$DEFAULT_PASSWORD" | chpasswd
+                set_password "$username" "$DEFAULT_PASSWORD"
                 passwd -e "$username" 2>/dev/null  # Force change on login
                 log_success "Set password for user: $username"
                 fixed_count=$((fixed_count + 1))
@@ -834,7 +834,7 @@ fix_insecure_passwords() {
             if [[ "$u" != "$main_user" && "$u" != "$protected_user" && "$u" != "root" ]]; then
                 if user_exists "$u"; then
                     log_warn "User $u has weak password in README ('$p'). Updating..."
-                    echo "$u:$DEFAULT_PASSWORD" | chpasswd
+                    set_password "$u" "$DEFAULT_PASSWORD"
                     log_success "Updated password for $u to comply with password policy"
                     log_score 5 "Changed insecure password for user $u"
                     fixed_count=$((fixed_count + 1))
@@ -864,7 +864,7 @@ fix_insecure_passwords() {
         [[ -z "$blank_user" ]] && continue
         if [[ "$blank_user" != "$main_user" && "$blank_user" != "$protected_user" && "$blank_user" != "root" ]]; then
             if user_exists "$blank_user"; then
-                echo "$blank_user:$DEFAULT_PASSWORD" | chpasswd 2>/dev/null || true
+                set_password "$blank_user" "$DEFAULT_PASSWORD" 2>/dev/null || true
                 log_success "Set secure password for account with blank password: $blank_user"
                 log_score 5 "Secured blank password on account $blank_user"
                 fixed_count=$((fixed_count + 1))
@@ -1205,6 +1205,33 @@ verify_user_account_shells() {
 }
 
 # Main module execution
+# Weak shared passwords are the classic hidden vuln: rotate every authorized account's password once
+# (never the operator/root, never locked accounts). A state file prevents re-rotating on later runs.
+rotate_authorized_passwords() {
+    log_section "Rotating Passwords of Authorized Accounts"
+    [[ "${ROTATE_PASSWORDS:-1}" == 1 ]] || return 0
+    command_exists jq || return 0
+    local main_user protected state u hash count=0
+    main_user=$(get_main_user)
+    protected="${PROTECTED_USER:-$main_user}"
+    state="$SCRIPT_DIR/../data/pw_rotated.txt"
+    touch "$state"
+    while IFS= read -r u; do
+        [[ -z "$u" || "$u" == root || "$u" == "$main_user" || "$u" == "$protected" || "$u" == "${SUDO_USER:-}" ]] && continue
+        user_exists "$u" || continue
+        grep -qxF "$u" "$state" && continue
+        hash=$(getent shadow "$u" | cut -d: -f2)
+        [[ -z "$hash" || "$hash" == '!'* || "$hash" == '*'* ]] && continue
+        if set_password "$u" "$DEFAULT_PASSWORD"; then
+            echo "$u" >> "$state"
+            log_score 5 "Changed password for authorized user $u"
+            count=$((count + 1))
+        fi
+    done < <(echo "$README_DATA" | jq -r '.all_users[]?.name // empty')
+    log_info "Rotated passwords for $count authorized account(s)"
+    return 0
+}
+
 run_user_auditing() {
     log_section "User Auditing Module"
 
@@ -1244,6 +1271,7 @@ run_user_auditing() {
     add_users_to_groups
     fix_null_passwords
     fix_insecure_passwords
+    rotate_authorized_passwords
     enforce_password_policies
     check_password_hashing
     disable_system_user_logins

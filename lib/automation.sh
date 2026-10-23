@@ -298,8 +298,7 @@ run_worker_module() {
             fi
         fi
         if [[ -z "${SSH_PUBLIC_KEY:-}" ]]; then
-            log_warn "No valid SSH public key found for $SSH_TARGET_USER; skipping ssh_hardening to prevent lockout"
-            return 0
+            log_warn "No valid SSH public key found for ${SSH_TARGET_USER:-?}; hardening SSH but leaving password logins on to prevent lockout"
         fi
     fi
     run_module "$module"

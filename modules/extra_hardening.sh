@@ -168,7 +168,8 @@ extra_audit_apparmor() {
 # Lock the screen after 5 idle minutes and require a password (Cinnamon/Mint and GNOME), system-wide via dconf defaults.
 extra_screen_lock() {
     command_exists dconf || [[ -d /etc/dconf ]] || return 0
-    local db=/etc/dconf/db/local.d prof=/etc/dconf/profile/user f="$db/00-cp-screenlock"
+    local db=/etc/dconf/db/local.d prof=/etc/dconf/profile/user
+    local f="$db/00-cp-screenlock"
     [[ -f "$f" ]] && return 0
     mkdir -p "$db" /etc/dconf/profile 2>/dev/null || return 0
     cat > "$f" <<'DCONF'
@@ -223,7 +224,10 @@ extra_host_conf() {
 extra_set_kv() {
     local file="$1" key="$2" value="$3" sep="${4:- = }"
     [[ -f "$file" && ! -L "$file" ]] || return 0
-    grep -Fxq -- "${key}${sep}${value}" "$file" && return 0
+    # already correct only if the desired line exists and no other active line sets a different value
+    if grep -Fxq -- "${key}${sep}${value}" "$file"        && ! grep -E "^[[:space:]]*${key}[[:space:]]*(=|[[:space:]])" "$file" | grep -Fvxq -- "${key}${sep}${value}"; then
+        return 0
+    fi
     backup_file "$file" >/dev/null 2>&1 || true
     if grep -Eq "^[[:space:]]*${key}[[:space:]]*(=|[[:space:]])" "$file"; then
         sed -E -i "s~^[[:space:]]*${key}[[:space:]]*(=|[[:space:]]).*~${key}${sep}${value}~" "$file"
@@ -275,10 +279,22 @@ extra_shell_profile() {
 
 # Network/kernel sysctls; one idempotent drop-in.
 extra_sysctl_extra() {
-    local f=/etc/sysctl.d/99-cp-extra.conf
-    [[ -f "$f" ]] && return 0
+    local f=/etc/sysctl.d/99-cp-extra.conf other key
     [[ -d /etc/sysctl.d ]] || return 0
+    # a planted drop-in or sysctl.conf line that re-enables forwarding/redirects scores as a vuln even if ours wins
+    for key in net.ipv4.ip_forward net.ipv6.conf.all.forwarding net.ipv4.conf.all.accept_redirects net.ipv4.conf.all.send_redirects                net.ipv4.conf.all.accept_source_route net.ipv4.tcp_syncookies kernel.randomize_va_space kernel.sysrq; do
+        for other in /etc/sysctl.conf /etc/sysctl.d/*.conf /usr/lib/sysctl.d/*.conf; do
+            [[ "$other" == "$f" || ! -f "$other" ]] && continue
+            grep -Eq "^[[:space:]]*${key//./\.}[[:space:]]*=[[:space:]]*(1|2)" "$other" || continue
+            case "$key" in net.ipv4.tcp_syncookies) continue ;; kernel.randomize_va_space) grep -Eq "=[[:space:]]*2" "$other" && continue ;; esac
+            [[ "$other" == /usr/lib/* ]] && continue
+            extra_comment_matching "$other" "^[[:space:]]*${key//./\.}[[:space:]]*=" "Removed conflicting sysctl $key"
+        done
+    done
+    [[ -f "$f" ]] && return 0
     cat > "$f" <<'SYSCTL'
+net.ipv4.ip_forward = 0
+net.ipv6.conf.all.forwarding = 0
 net.ipv4.tcp_syncookies = 1
 net.ipv4.tcp_max_syn_backlog = 2048
 net.ipv4.conf.all.accept_source_route = 0
@@ -306,6 +322,35 @@ SYSCTL
     extra_fixed "Extra sysctl hardening written ($f)"
 }
 
+# Scoring reads the stock files, not our later drop-ins: fix the originals too (only when the server exists).
+extra_web_direct() {
+    local f
+    for f in /etc/apache2/conf-available/security.conf /etc/apache2/conf-enabled/security.conf /etc/httpd/conf/httpd.conf; do
+        [[ -f "$f" && ! -L "$f" ]] || continue
+        extra_set_kv "$f" ServerTokens Prod ' '
+        extra_set_kv "$f" ServerSignature Off ' '
+        extra_set_kv "$f" TraceEnable Off ' '
+    done
+    f=/etc/nginx/nginx.conf
+    if [[ -f "$f" ]] && ! grep -Eq '^[[:space:]]*server_tokens[[:space:]]+off;' "$f"; then
+        backup_file "$f" >/dev/null 2>&1 || true
+        if grep -Eq '^[[:space:]]*server_tokens' "$f"; then
+            sed -i -E 's/^([[:space:]]*)server_tokens[[:space:]]+[^;]*;/\1server_tokens off;/' "$f"
+        else
+            sed -i -E '0,/http[[:space:]]*\{/s//http {\n\tserver_tokens off;/' "$f"
+        fi
+        extra_fixed "nginx server_tokens off in $f"
+    fi
+    for f in /etc/php/*/apache2/php.ini /etc/php/*/fpm/php.ini /etc/php/*/cli/php.ini; do
+        [[ -f "$f" ]] || continue
+        extra_set_kv "$f" expose_php Off ' = '
+        extra_set_kv "$f" allow_url_include Off ' = '
+        extra_set_kv "$f" display_errors Off ' = '
+        extra_set_kv "$f" disable_functions 'exec,passthru,shell_exec,system,proc_open,popen' ' = '
+    done
+    return 0
+}
+
 run_extra_hardening() {
     log_section "Extra Hardening (deterministic checklist)"
     extra_host_conf
@@ -322,6 +367,7 @@ run_extra_hardening() {
     extra_screen_lock
     extra_firefox_policy
     extra_mail_dns
+    extra_web_direct
     extra_update_settings
     extra_shell_profile
     extra_sysctl_extra

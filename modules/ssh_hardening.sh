@@ -150,33 +150,26 @@ EOF
 
     chmod 0644 "$SSHD_CONFIG_FILE"
 
-    # Directly harden /etc/ssh/sshd_config for competition scoring checkers
-    local main_sshd_config="/etc/ssh/sshd_config"
+    # No key to install: never lock the operator out; keep password logins, harden everything else.
+    if [[ -z "$SSH_PUBLIC_KEY" ]]; then
+        sed -i -E 's/^PasswordAuthentication no/PasswordAuthentication yes/; /^AuthenticationMethods publickey/d; s/^KbdInteractiveAuthentication no/KbdInteractiveAuthentication yes/; s/^ChallengeResponseAuthentication no/ChallengeResponseAuthentication yes/' "$SSHD_CONFIG_FILE"
+        log_warn "No SSH public key: password authentication left ON to avoid lockout (everything else hardened)"
+    fi
+
+    # Directly harden /etc/ssh/sshd_config: scoring checkers read this file, and first match wins in sshd
+    local main_sshd_config="/etc/ssh/sshd_config" pair key val
     if [[ -f "$main_sshd_config" ]]; then
         backup_file "$main_sshd_config" 2>/dev/null || true
-        if grep -qE '^\s*#?\s*PermitRootLogin' "$main_sshd_config"; then
-            sed -i -E 's/^\s*#?\s*PermitRootLogin\s+.*/PermitRootLogin no/' "$main_sshd_config"
-        else
-            echo "PermitRootLogin no" >> "$main_sshd_config"
-        fi
-
-        if grep -qE '^\s*#?\s*PermitEmptyPasswords' "$main_sshd_config"; then
-            sed -i -E 's/^\s*#?\s*PermitEmptyPasswords\s+.*/PermitEmptyPasswords no/' "$main_sshd_config"
-        else
-            echo "PermitEmptyPasswords no" >> "$main_sshd_config"
-        fi
-
-        if grep -qE '^\s*#?\s*Protocol' "$main_sshd_config"; then
-            sed -i -E 's/^\s*#?\s*Protocol\s+.*/Protocol 2/' "$main_sshd_config"
-        fi
-
-        if grep -qE '^\s*#?\s*X11Forwarding' "$main_sshd_config"; then
-            sed -i -E 's/^\s*#?\s*X11Forwarding\s+.*/X11Forwarding no/' "$main_sshd_config"
-        fi
-
-        if grep -qE '^\s*#?\s*MaxAuthTries' "$main_sshd_config"; then
-            sed -i -E 's/^\s*#?\s*MaxAuthTries\s+.*/MaxAuthTries 4/' "$main_sshd_config"
-        fi
+        for pair in "PermitRootLogin no" "PermitEmptyPasswords no" "Protocol 2" "X11Forwarding no" "MaxAuthTries 4"                     "PermitUserEnvironment no" "HostbasedAuthentication no" "IgnoreRhosts yes" "LoginGraceTime 60"                     "ClientAliveInterval 300" "ClientAliveCountMax 2" "LogLevel VERBOSE" "UsePAM yes" "StrictModes yes"                     "AllowAgentForwarding no" "MaxSessions 4"; do
+            key=${pair%% *}; val=${pair#* }
+            if grep -qE "^[[:space:]]*#?[[:space:]]*${key}[[:space:]]" "$main_sshd_config"; then
+                sed -i -E "s/^[[:space:]]*#?[[:space:]]*${key}[[:space:]].*/${key} ${val}/" "$main_sshd_config"
+            elif [[ "$key" != Protocol ]]; then
+                sed -i "1i ${key} ${val}" "$main_sshd_config"  # top of file: before any Match block
+            fi
+        done
+        # collapse duplicate directive lines created by the substitution above
+        awk '!(/^[A-Za-z]+ / && seen[$0]++)' "$main_sshd_config" > "$main_sshd_config.cp" && cat "$main_sshd_config.cp" > "$main_sshd_config"; rm -f "$main_sshd_config.cp"
     fi
 
     log_success "Hardened SSH configuration created"

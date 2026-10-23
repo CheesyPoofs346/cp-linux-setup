@@ -156,7 +156,7 @@ check_system() {
 
     if ! is_supported_os; then
         log_warn "This OS may not be fully supported"
-        log_warn "Supported: Linux Mint 21.x, Ubuntu 24.x"
+        log_warn "Supported: Linux Mint 21-23, Ubuntu 22/24/25, Debian 12/13"
         if [[ "${CP_AUTO:-0}" == 1 ]]; then
             [[ "${ALLOW_UNSUPPORTED:-0}" == 1 ]] && return 0
             log_error "Auto mode refuses this OS. --allow-unsupported is for disposable tests only."

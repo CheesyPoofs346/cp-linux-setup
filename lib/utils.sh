@@ -119,9 +119,11 @@ is_supported_os() {
     local os=$(detect_os)
     local version=$(detect_os_version)
 
-    if [[ "$os" == "linuxmint" && "$version" == "21"* ]]; then
+    if [[ "$os" == "linuxmint" && "$version" =~ ^(21|22|23) ]]; then
         return 0
-    elif [[ "$os" == "ubuntu" && "$version" == "24."* ]]; then
+    elif [[ "$os" == "ubuntu" && "$version" =~ ^(22|24|25)\. ]]; then
+        return 0
+    elif [[ "$os" == "debian" && "$version" =~ ^(12|13) ]]; then
         return 0
     else
         return 1
@@ -172,8 +174,46 @@ log_score() {
     log_success "+$points points: $description"
 }
 
+# userdel that also works for a second UID-0 account (userdel refuses: "currently used by process 1").
+# usage: safe_userdel [-r] name
+safe_userdel() {
+    local remove_home=0 name
+    [[ "${1:-}" == "-r" ]] && { remove_home=1; shift; }
+    name="${1:?user required}"
+    getent passwd "$name" >/dev/null || return 0
+    if (( remove_home )); then userdel -r "$name" 2>/dev/null || userdel "$name" 2>/dev/null || true
+    else userdel "$name" 2>/dev/null || true; fi
+    getent passwd "$name" >/dev/null || return 0
+    local home; home=$(getent passwd "$name" | cut -d: -f6)
+    local f
+    for f in /etc/passwd /etc/shadow /etc/group /etc/gshadow; do
+        [[ -f "$f" ]] && sed -i "/^${name}:/d" "$f"
+    done
+    for f in /etc/group /etc/gshadow; do
+        [[ -f "$f" ]] && sed -i -E "s/([:,])${name}(,|\$)/\1\2/; s/,,/,/g; s/,\$//; s/:,/:/" "$f"
+    done
+    (( remove_home )) && [[ "$home" == /home/* && -d "$home" ]] && rm -rf -- "$home"
+    ! getent passwd "$name" >/dev/null
+}
+
+# Set a password even when our own pam_pwquality policy would reject it (chpasswd enforces policy for root).
+# usage: set_password user password
+set_password() {
+    local user="$1" pw="$2" hash
+    printf '%s:%s
+' "$user" "$pw" | chpasswd 2>/dev/null && return 0
+    if command -v openssl >/dev/null 2>&1; then
+        hash=$(printf '%s' "$pw" | openssl passwd -6 -stdin 2>/dev/null)
+    fi
+    if [[ -z "${hash:-}" ]]; then
+        hash=$(python3 -c 'import crypt,sys; print(crypt.crypt(sys.argv[1], crypt.mksalt(crypt.METHOD_SHA512)))' "$pw" 2>/dev/null)
+    fi
+    [[ -n "$hash" ]] && usermod -p "$hash" "$user" 2>/dev/null
+}
+
 # Export functions for use in other scripts
 export -f log_debug log_info log_warn log_error log_success log_section
 export -f require_root command_exists check_dependencies
 export -f detect_os detect_os_version is_supported_os
+export -f safe_userdel set_password
 export -f backup_file safe_edit get_timestamp log_score

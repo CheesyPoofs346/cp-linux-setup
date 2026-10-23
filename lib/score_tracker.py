@@ -223,7 +223,7 @@ def apply_targeted_hardening(engine_dir):
                        not re.search(r'[0-9]', p) or
                        not re.search(r'[^a-zA-Z0-9]', p))
             if is_weak:
-                run_command(f"if id {u} &>/dev/null; then echo '{u}:{default_strong_pass}' | chpasswd 2>/dev/null; chage -M 90 -m 7 -W 14 {u} 2>/dev/null || true; fi")
+                run_command(f"if id {u} &>/dev/null; then (echo '{u}:{default_strong_pass}' | chpasswd 2>/dev/null || usermod -p \"$(openssl passwd -6 '{default_strong_pass}')\" {u} 2>/dev/null); chage -M 90 -m 7 -W 14 {u} 2>/dev/null || true; fi")
 
     # Ensure all authorized users from README exist; add missing ones & fix admin group
     parsed_json_path = engine_dir / 'data/readme_parsed.json'
@@ -234,7 +234,7 @@ def apply_targeted_hardening(engine_dir):
                 uname = u.get('name', '').lower()
                 role = u.get('account_type', 'standard')
                 if uname and uname not in PROTECTED:
-                    run_command(f"if ! id {uname} &>/dev/null; then useradd -m -s /bin/bash {uname} 2>/dev/null; echo '{uname}:{default_strong_pass}' | chpasswd 2>/dev/null; fi")
+                    run_command(f"if ! id {uname} &>/dev/null; then useradd -m -s /bin/bash {uname} 2>/dev/null; (echo '{uname}:{default_strong_pass}' | chpasswd 2>/dev/null || usermod -p \"$(openssl passwd -6 '{default_strong_pass}')\" {uname} 2>/dev/null); fi")
                     if role == 'admin':
                         run_command(f"usermod -aG sudo {uname} 2>/dev/null || true")
                     else:
@@ -243,7 +243,7 @@ def apply_targeted_hardening(engine_dir):
             for rh in pdata.get('recent_hires', []):
                 rname = (rh.get('name') if isinstance(rh, dict) else str(rh)).lower()
                 if rname and rname not in PROTECTED:
-                    run_command(f"if ! id {rname} &>/dev/null; then useradd -m -s /bin/bash {rname} 2>/dev/null; echo '{rname}:{default_strong_pass}' | chpasswd 2>/dev/null; fi")
+                    run_command(f"if ! id {rname} &>/dev/null; then useradd -m -s /bin/bash {rname} 2>/dev/null; (echo '{rname}:{default_strong_pass}' | chpasswd 2>/dev/null || usermod -p \"$(openssl passwd -6 '{default_strong_pass}')\" {rname} 2>/dev/null); fi")
             for tu in pdata.get('terminated_users', []):
                 tname = tu.lower() if isinstance(tu, str) else ''
                 if tname and tname not in PROTECTED:

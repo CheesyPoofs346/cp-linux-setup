@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -21,7 +22,32 @@ from pathlib import Path
 
 BACKDOOR_RE = re.compile(r'/dev/(tcp|udp)/|(^|[^a-z])nc(at)?\s[^#]*-[a-zA-Z]*e\s|bash\s+-i\s*>&|mkfifo\s+/tmp|(curl|wget)[^|]*\|\s*(ba)?sh|'
                          r'python[0-9.]*\s+-c\s+.import socket|base64\s+-d[^|]*\|\s*(ba)?sh|socat\s.*exec', re.I)
-ALIAS_RE = re.compile(r'^\s*alias\s+(sudo|su|ls|cd|cat|passwd)\s*=', re.I)
+ROOT_EQUIV_GROUPS = {'docker', 'lxd', 'lxc', 'disk', 'shadow', 'root'}
+BACKDOOR_NAMES = set('nc ncat netcat nc.traditional nc.openbsd socat'.split())
+WEBSHELL_RE = re.compile(r'(system|exec|passthru|shell_exec|popen|proc_open|eval|assert)\s*\(\s*(base64_decode\s*\(\s*)?\$_(GET|POST|REQUEST|COOKIE|SERVER)|'
+                         r'eval\s*\(\s*(gzinflate|base64_decode|str_rot13)\s*\(|\$\{?_(GET|POST|REQUEST)\}?\s*\[[^\]]+\]\s*\(', re.I)
+CRON_EVIL_RE = re.compile(r'(/tmp/|/var/tmp/|/dev/shm/|/\.[A-Za-z0-9_]+(\s|$))')
+ALIAS_RE = re.compile(r'^\s*alias\s+([\w.-]+)\s*=\s*(.*)$')
+ALIAS_WATCH = set('sudo su ls cd cat passwd ps netstat ss kill pkill rm mv cp ssh top systemctl visudo history apt apt-get chmod chown find grep'.split())
+
+
+def _sudo_grant_to_stranger(ctx, line):
+    """'eve ALL=(ALL) ALL' / '%ops ALL=...' for anyone the README does not list as an administrator."""
+    m = re.match(r'^\s*(%?[\w.@-]+)\s+\S+\s*=', line)
+    if not m or m.group(1) in ('Defaults', 'Cmnd_Alias', 'User_Alias', 'Host_Alias', 'Runas_Alias'):
+        return False
+    who = m.group(1).lstrip('%').lower()
+    return not (who in ctx.admin_users or who in ctx.protected or who in ('sudo', 'admin', 'root'))
+
+
+def alias_hijacked(line):
+    """True for an alias that swaps a common command for something else (alias ls='ls --color' is fine)."""
+    m = ALIAS_RE.match(line)
+    if not m or m.group(1) not in ALIAS_WATCH:
+        return False
+    rhs = m.group(2).strip().strip('\'"').lstrip(chr(92)).split()
+    return not rhs or rhs[0] not in (m.group(1), f'/usr/bin/{m.group(1)}', f'/bin/{m.group(1)}')
+
 PROTECT_RE = re.compile(r'aeacus|cyberpatriot|scoring|/opt/engine|^engine$', re.I)
 
 BAD_PACKAGES = (
@@ -37,12 +63,14 @@ BAD_PACKAGES = (
     'zmap masscan unicornscan arpwatch netdiscover dirb gobuster wpscan sslscan hunt xprobe sipcalc ftp-ssl telnetd inetutils-telnetd '
     'telnetd-ssl rsh-server rsh-redone-server talkd ntalk nis ypserv ypbind tightvncserver vnc4server '
     'gnome-games kdegames kpat ksudoku kmines kmahjongg kreversi klines gbrainy xmoto pingus extremetuxracer neverball neverputt '
+    'vsftpd proftpd-basic proftpd-core pure-ftpd pure-ftpd-common tftpd-hpa tftpd snmpd xinetd openbsd-inetd inetutils-inetd rsh-server ftpd '
     'chromium-bsu flightgear supertuxkart warzone2100 widelands dosbox pidgin-otr').split()
 DUAL_USE_PACKAGES = 'netcat-openbsd tcpdump socat snort openvpn x11vnc remmina nfs-kernel-server'.split()
 SUID_ABUSABLE = set('find vim vim.basic vi nano python python2 python3 perl ruby bash sh dash zsh cp mv less more awk gawk mawk env nmap tar zip '
                     'unzip nc ncat socat php node lua man tee xxd base64 dd cat head tail sed gdb strace ftp wget curl rsync tclsh'.split())
 SUID_DEFAULT_DIRS = ('/usr/bin', '/bin', '/usr/sbin', '/sbin', '/usr/lib', '/usr/libexec', '/usr/local/bin', '/usr/local/sbin', '/opt', '/home', '/tmp', '/var/tmp')
 PROHIBITED_SERVICES = 'telnet.socket telnetd vsftpd proftpd pure-ftpd tftpd-hpa rsh.socket rlogin.socket rexec.socket snmpd nfs-server rpcbind apache2 lighttpd nginx xinetd xrdp x11vnc ypserv ypbind rpc-statd nfs-mountd tightvncserver vncserver'.split()
+AUTO_STOP_SERVICES = set('telnet telnetd vsftpd proftpd pure-ftpd tftpd-hpa rsh rlogin rexec snmpd xinetd xrdp x11vnc ypserv ypbind'.split())
 SAFE_STOP_SERVICES = 'avahi-daemon cups cups-browsed bluetooth ModemManager whoopsie kerneloops speech-dispatcher colord geoclue apport'.split()
 FIREFOX_PREFS = [
     'user_pref("dom.disable_open_during_load", true);',
@@ -117,6 +145,20 @@ class Context:
                 return True
         return False
 
+    def listeners(self):
+        """(port, pid, process name) for every listening TCP/UDP socket."""
+        out = subprocess.run(['ss', '-ltunpH'], capture_output=True, text=True).stdout
+        found = []
+        for line in out.splitlines():
+            m = re.search(r':(\d+)\s+\S+\s+users:\(\("([^"]+)",pid=(\d+)', line)
+            if m:
+                found.append((int(m.group(1)), int(m.group(3)), m.group(2)))
+        return found
+
+    def snaps(self):
+        out = subprocess.run(['snap', 'list'], capture_output=True, text=True).stdout.splitlines()[1:]
+        return [l.split()[0] for l in out if l.split()]
+
     def password_status(self, user):
         out = subprocess.run(['passwd', '-S', user], capture_output=True, text=True).stdout.split()
         return out[1] if len(out) > 1 else ''
@@ -176,6 +218,33 @@ def scan(ctx):
         for n, line in comment_lines(ctx, sf, lambda l: 'NOPASSWD' in l or '!authenticate' in l):
             add('sudoers', f'{sf}:{n}: {line}', ('comment-sudoers', sf, line), 'auto')
 
+    # --- auto: sudo grants to people the README does not list as administrators
+    for sf in sudo_files[1:]:
+        for n, line in comment_lines(ctx, sf, lambda l: _sudo_grant_to_stranger(ctx, l)):
+            add('sudoers-grant', f'{sf}:{n}: {line}', ('comment-sudoers', sf, line), 'auto')
+
+    # --- auto: groups that are root in disguise (docker/lxd/disk/shadow) for anyone but the operator
+    for line in ctx.read('/etc/group'):
+        f = line.split(':')
+        if len(f) >= 4 and f[0] in ROOT_EQUIV_GROUPS and not ctx.mentioned(f[0]):
+            for member in filter(None, f[3].split(',')):
+                if member.lower() not in ctx.protected:
+                    add('privileged-group', f'{member} is in group {f[0]}, which is equivalent to root', ('gpasswd-del', member, f[0]), 'auto')
+
+    # --- auto: hacking tools installed as snaps
+    try:
+        for name in ctx.snaps():
+            if name in BAD_PACKAGES and not ctx.mentioned(name):
+                add('hacking-snap', f'snap {name} is a prohibited hacking tool/game', ('snap-remove', name), 'auto')
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    # --- review: binaries dropped into the local bin dirs (empty on a clean image)
+    for d in ('/usr/local/bin', '/usr/local/sbin'):
+        for n in sorted(_listdir(ctx.p(d))):
+            if not PROTECT_RE.search(n):
+                add('local-binary', f'{d}/{n} is a non-packaged program', ('rm', f'{d}/{n}'))
+
     # --- auto: backdoor one-liners in startup / cron files
     startup = ['/etc/crontab', '/etc/rc.local', '/etc/profile', '/etc/bash.bashrc', '/root/.bashrc', '/root/.profile']
     for d in ('/etc/cron.d', '/etc/cron.hourly', '/etc/cron.daily', '/etc/cron.weekly', '/etc/cron.monthly', '/etc/profile.d', '/var/spool/cron/crontabs'):
@@ -186,8 +255,11 @@ def scan(ctx):
     for f in dict.fromkeys(startup):
         for n, line in comment_lines(ctx, f, lambda l: bool(BACKDOOR_RE.search(l))):
             add('backdoor-line', f'{f}:{n}: {line}', ('comment', f, line), 'auto')
-        for n, line in comment_lines(ctx, f, lambda l: bool(ALIAS_RE.match(l))):
-            add('alias-hijack', f'{f}:{n}: {line}', ('comment', f, line))
+        if f.startswith(('/var/spool/cron/crontabs/', '/etc/cron.d/', '/etc/crontab')):
+            for n, line in comment_lines(ctx, f, lambda l: bool(CRON_EVIL_RE.search(l))):
+                add('cron-line', f'{f}:{n}: {line}', ('comment', f, line), 'auto')
+        for n, line in comment_lines(ctx, f, alias_hijacked):
+            add('alias-hijack', f'{f}:{n}: {line}', ('comment', f, line), 'auto')
 
     # --- auto: empty-password regular accounts (lock them; never the operator)
     for u in ctx.passwd_entries():
@@ -222,13 +294,14 @@ def scan(ctx):
             add('service-off', f'{unit} is a non-essential service', ('disable-unit', unit), 'auto')
     for unit in PROHIBITED_SERVICES:
         if not ctx.mentioned(unit.split('.')[0]) and _unit_on(ctx, unit):
-            add('prohibited-service', f'{unit} is running/enabled and not a README critical service', ('disable-unit', unit))
+            add('prohibited-service', f'{unit} is running/enabled and not a README critical service', ('disable-unit', unit),
+                'auto' if unit.split('.')[0] in AUTO_STOP_SERVICES else 'review')
 
     # --- review: accounts
     for u in ctx.passwd_entries():
         name = u['name'].lower()
         if u['uid'] == 0 and name != 'root':
-            add('uid0-user', f"{u['name']} has UID 0 (a second root)", ('userdel', u['name']))
+            add('uid0-user', f"{u['name']} has UID 0 (a second root)", ('userdel', u['name']), 'auto')
         elif u['uid'] >= 1000 and u['uid'] < 65534 and ctx.allowed_users and name not in ctx.allowed_users and name not in ctx.protected:
             add('unauthorized-user', f"{u['name']} is not in the README user lists", ('userdel', u['name']))
     for line in ctx.read('/etc/group'):
@@ -245,7 +318,9 @@ def scan(ctx):
             add('loose-root-file', f'/{name} is a loose file at the top of /', ('rm', f'/{name}'))
     for n in sorted(_listdir(ctx.p('/etc/cron.d'))):
         if n not in CRON_DEFAULT:
-            add('cron', f'/etc/cron.d/{n} is not a default cron file', ('rm', f'/etc/cron.d/{n}'))
+            body = ' '.join(l for l in ctx.read(f'/etc/cron.d/{n}') if not l.lstrip().startswith('#'))
+            evil = bool(re.search(r'(/tmp/|/var/tmp/|/dev/shm/|/home/)', body)) or bool(BACKDOOR_RE.search(body))
+            add('cron', f'/etc/cron.d/{n} is not a default cron file', ('rm', f'/etc/cron.d/{n}'), 'auto' if evil else 'review')
     for n in sorted(_listdir(ctx.p('/etc/systemd/system'))):
         if n.endswith('.service'):
             exec_lines = [l for l in ctx.read(f'/etc/systemd/system/{n}') if l.startswith('ExecStart')]
@@ -261,7 +336,7 @@ def scan(ctx):
             for k in keys:
                 if u['name'].lower() in ctx.protected and u['name'] != 'root' and _key_known(ctx, k):
                     continue
-                add('ssh-key', f"{u['name']} authorized key: {k[:60]}...", ('del-line', f"{u['home']}/.ssh/authorized_keys", k))
+                add('ssh-key', f"{u['name']} authorized key: {k[:60]}...", ('del-line', f"{u['home']}/.ssh/authorized_keys", k), 'auto')
             home = ctx.p(u['home'])
             for pattern in ('Desktop', 'Documents', 'Downloads', 'Music', 'Videos', 'Pictures'):
                 base = home / pattern
@@ -271,6 +346,31 @@ def scan(ctx):
                         continue
                     if TOOL_NAME_RE.search(rel) or SCRIPT_EXT_RE.search(f.name):
                         add('user-file', f'{rel} (script/executable/tool in a user folder)', ('rm', rel))
+
+    # --- auto: network backdoors (nc/socat listeners) and PHP web shells
+    try:
+        for port, pid, name in ctx.listeners():
+            if name in BACKDOOR_NAMES:
+                add('backdoor-listener', f'{name} (pid {pid}) is listening on port {port}', ('kill', pid, name), 'auto')
+    except (OSError, subprocess.SubprocessError):
+        pass
+    for base in ('/var/www', '/srv', '/usr/share/nginx', '/opt'):
+        for f in _walk(ctx.p(base), depth=8):
+            if f.suffix.lower() in ('.php', '.phtml', '.php5', '.phar'):
+                try:
+                    if f.stat().st_size > 2_000_000:
+                        continue
+                    text = f.read_text(encoding='utf-8', errors='ignore')
+                except OSError:
+                    continue
+                if WEBSHELL_RE.search(text):
+                    rel = '/' + str(f.relative_to(ctx.root)).replace(os.sep, '/')
+                    add('webshell', f'{rel} looks like a PHP web shell', ('rm', rel), 'auto')
+    for base in ('/tmp', '/var/tmp', '/dev/shm'):
+        for f in _walk(ctx.p(base), depth=3):
+            if f.is_file() and os.access(f, os.X_OK) and not f.is_symlink() and not PROTECT_RE.search(str(f)) and 'cp-linux-setup' not in str(f):
+                rel = '/' + str(f.relative_to(ctx.root)).replace(os.sep, '/')
+                add('temp-executable', f'{rel} is an executable file in a temp directory', ('rm', rel))
 
     # --- review: running programs from user/temp locations
     try:
@@ -325,6 +425,34 @@ def run(cmd, **kw):
     return subprocess.run(cmd, capture_output=True, text=True, **kw)
 
 
+def _force_remove_user(ctx, name):
+    """userdel refuses a second UID-0 account ("used by process 1"); edit the account files directly."""
+    home = ''
+    for line in ctx.read('/etc/passwd'):
+        f = line.split(':')
+        if f[0] == name and len(f) > 5:
+            home = f[5]
+    for path in ('/etc/passwd', '/etc/shadow', '/etc/group', '/etc/gshadow'):
+        real = Path(ctx.p(path))
+        if not real.exists():
+            continue
+        out = []
+        for line in real.read_text().splitlines():
+            f = line.split(':')
+            if f[0] == name:
+                continue
+            if path.endswith(('group', 'gshadow')) and len(f) >= 4:
+                idx = 3
+                f[idx] = ','.join(m for m in f[idx].split(',') if m and m != name)
+                line = ':'.join(f)
+            out.append(line)
+        real.write_text(chr(10).join(out) + chr(10))
+    if home.startswith('/home/') and Path(ctx.p(home)).is_dir():
+        shutil.rmtree(ctx.p(home), ignore_errors=True)
+    gone = not any(l.split(':')[0] == name for l in ctx.read('/etc/passwd'))
+    return gone, f'force-removed user {name}'
+
+
 def apply(ctx, finding):
     """Perform one finding's fix. Returns (ok, message). Paths are re-validated against the root prefix."""
     act = finding.action
@@ -366,7 +494,7 @@ def apply(ctx, finding):
             if changed:
                 _backup(ctx, path)
                 path.write_text(''.join(out), encoding='utf-8')
-            return changed, f'{kind} in {act[1]}'
+            return True, (f'{kind} in {act[1]}' if changed else f'{act[1]} already clean')
         if kind == 'comment-sudoers':
             path = ctx.p(act[1])
             original = path.read_text(encoding='utf-8', errors='replace')
@@ -401,12 +529,16 @@ def apply(ctx, finding):
         if kind == 'userdel':
             if act[1].lower() in ctx.protected:
                 return False, 'refusing to delete protected account'
-            return run(['userdel', '-r', act[1]]).returncode in (0, 12), f'deleted user {act[1]}'
+            if run(['userdel', '-r', act[1]]).returncode in (0, 12):
+                return True, f'deleted user {act[1]}'
+            return _force_remove_user(ctx, act[1])
         if kind == 'gpasswd-del':
             return run(['gpasswd', '-d', act[1], act[2]]).returncode == 0, f'removed {act[1]} from {act[2]}'
         if kind == 'disable-unit':
             run(['systemctl', 'disable', '--now', act[1]])
             return True, f'disabled {act[1]}'
+        if kind == 'snap-remove':
+            return run(['snap', 'remove', '--purge', act[1]]).returncode == 0, f'removed snap {act[1]}'
         if kind == 'kill':
             run(['kill', '-9', str(act[1])])
             return True, f'killed pid {act[1]}'
