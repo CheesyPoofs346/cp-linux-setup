@@ -494,24 +494,26 @@ def solve_file_hash(ev, question, number=0):
 
 def solve_base64(ev, question, number=0):
     found = []
-    named = {p.rstrip('.,;:') for p in re.findall(r'/[\w./-]+', question_body(question['content']))}
-    for home in ev.user_homes():
-        for f in ev.walk([str(home)], max_depth=3):
-            try:
-                if named and ev.logical(f) not in named:
-                    continue
-                if f.stat().st_size > 20000 or SKIP_FILE_NAMES.match(f.name) or f.name.startswith('.'):
-                    continue
-                raw = f.read_text(errors='ignore').strip()
-            except OSError:
+    named = {quoted or plain.rstrip('.,;:') for quoted, plain in
+             re.findall(r'''["“'](/[^"”'\r\n]+)["”']|(/[\w./-]+)''', question_body(question['content']))}
+    files = (ev.p(p) for p in sorted(named)) if named else (
+        f for home in ev.user_homes() for f in ev.walk([str(home)], max_depth=3))
+    for f in files:
+        try:
+            if f.is_symlink() or not f.is_file() or not f.resolve().is_relative_to(ev.root.resolve()):
                 continue
-            if len(raw) >= 12 and re.fullmatch(r'[A-Za-z0-9+/=\s]+', raw):
-                try:
-                    decoded = base64.b64decode(re.sub(r'\s', '', raw), validate=True).decode('utf-8')
-                except (ValueError, UnicodeDecodeError):
-                    continue
-                if decoded.isprintable() or '\n' in decoded:
-                    found.append((ev.logical(f), decoded.strip()))
+            if f.stat().st_size > 20000 or (not named and (SKIP_FILE_NAMES.match(f.name) or f.name.startswith('.'))):
+                continue
+            raw = f.read_text(errors='ignore').strip()
+        except OSError:
+            continue
+        if len(raw) >= (4 if named else 12) and re.fullmatch(r'[A-Za-z0-9+/=\s]+', raw):
+            try:
+                decoded = base64.b64decode(re.sub(r'\s', '', raw), validate=True).decode('utf-8')
+            except (ValueError, UnicodeDecodeError):
+                continue
+            if decoded.strip() and all(c.isprintable() or c in '\r\n\t' for c in decoded):
+                found.append((ev.logical(f), decoded.strip()))
     if not found:
         return None
     return {'answers': [found[0][1]], 'confidence': 'high' if len(found) == 1 else 'medium', 'why': f'base64 text in {found[0][0]}'}

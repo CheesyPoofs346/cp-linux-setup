@@ -21,7 +21,7 @@ SERVICE_ALIASES = {'openssh-server': 'ssh', 'sshd': 'ssh', 'openssh': 'ssh', 'ap
 SKIP_PREFIX = ('none', 'n/a', 'note', 'do not', 'all other', 'these users', 'the following', 'only')
 
 
-def html_to_lines(html):
+def html_to_lines(html, mark_headings=False):
     """Visible text, one logical line per block element."""
     class P(HTMLParser):
         def __init__(self):
@@ -30,7 +30,9 @@ def html_to_lines(html):
         def handle_starttag(self, tag, attrs):
             if tag in ('script', 'style'):
                 self.skip += 1
-            elif tag in ('br', 'p', 'li', 'tr', 'div', 'pre', 'ul', 'ol', 'table') or re.fullmatch(r'h[1-6]', tag):
+            elif re.fullmatch(r'h[1-6]', tag):
+                self.out.append('\n' + ('@@HEADING@@' if mark_headings else ''))
+            elif tag in ('br', 'p', 'li', 'tr', 'div', 'pre', 'ul', 'ol', 'table'):
                 self.out.append('\n')
             elif tag in ('td', 'th'):
                 self.out.append(' ')
@@ -49,11 +51,12 @@ def html_to_lines(html):
 
 def section_kind(line):
     low = re.sub(r'^[#*_\-\s]+', '', line).strip().rstrip(':').lower()
-    if re.match(r'^(authorized )?administrators?\b', low) and len(low) < 80:
+    low = re.sub(r'\([^)]*\)', '', low).strip()
+    if re.fullmatch(r'(authorized )?administrators?(?: and (?:authorized )?users?)?', low):
         return 'admin'
-    if re.match(r'^authorized users?\b', low) or low in ('users', 'standard users'):
+    if re.fullmatch(r'authorized users?', low) or low in ('users', 'standard users'):
         return 'standard'
-    if re.match(r'^(critical|required) services?\b', low) or low == 'services':
+    if re.fullmatch(r'(critical|required) services?', low) or low == 'services':
         return 'services'
     if re.match(r'^(terminated|former|fired|unauthorized|removed)\b.*\b(users?|employees?|accounts?|staff)\b', low):
         return 'terminated'
@@ -73,7 +76,7 @@ def entry_name(line):
     low = clean.lower()
     if not clean or low.startswith(SKIP_PREFIX):
         return None, clean
-    m = re.match('(' + NAME + r')(?=$|[\s:,;(])', clean)
+    m = re.fullmatch('(' + NAME + r')(?:\s*:\s*\S+)?(?:\s*\([^)]*\))*\s*', clean)
     name = m[1].lower() if m else None
     return (None if name in LABELS else name), clean
 
@@ -122,16 +125,17 @@ def prose_accounts(text):
                 names = [n.lower() for n in re.findall(r'(?:user(?:name)?|account(?: for| named| called)?)\s+["“\']?' + user, s, re.I)]
             for n in names:
                 if n not in LABELS and n not in STOPWORDS and n != 'you' and n not in [h['name'] for h in hires]:
-                    hires.append({'name': n, 'account_type': 'admin' if re.search(r'\badmin', low) else 'standard', 'groups': []})
-        for m in re.finditer(r'\b' + user + r'\b[^.]{0,40}?\b(?:is|are|should be|shall be)\s+(?:no longer|not)\s+(?:an?\s+)?admin', low):
+                    admin = bool(re.search(r'\b(?:as\s+(?:an?\s+)?|new\s+)admin|\badmin(?:istrator)?\s+account', low)) and not re.search(r'\bnot\s+(?:an?\s+)?admin', low)
+                    hires.append({'name': n, 'account_type': 'admin' if admin else 'standard', 'groups': []})
+        for m in re.finditer(r'\b' + user + r'\b(?:\s*\([^)]*\))?\s+(?:is|are|should be|shall be)\s+(?:no longer|not)\s+(?:an?\s+)?admin', low):
             demote.add(m[1])
-        for m in re.finditer(r'\b' + user + r'\b[^.]{0,30}?\b(?:should|must|needs to)\s+be\s+(?:an?\s+)?admin', low):
+        for m in re.finditer(r'\b' + user + r'\b\s+(?:should|must|needs to)\s+be\s+(?:an?\s+)?admin', low):
             promote.add(m[1])
-        for m in re.finditer(r'\b' + user + r'\b(?:\s*\([^)]*\))?\s+(?:has|have|was|were)\s+(?:been\s+)?(?:terminated|fired|let go|dismissed)|\b' + user + r'\b[^.]{0,20}(?:no longer works|has left the company|left the company)', low):
+        for m in re.finditer(r'\b' + user + r'\b(?:\s*\([^)]*\))?\s+(?:has|have|was|were)\s+(?:been\s+)?(?:terminated|fired|let go|dismissed)|\b' + user + r'\b\s+(?:no longer works|has left the company|left the company)', low):
             n = m[1] or m[2]
             if n and n not in terminated and n not in STOPWORDS:
                 terminated.append(n)
-    return hires, demote - promote, promote, terminated
+    return hires, demote, promote, terminated
 
 
 def groups_in(clean):
@@ -140,15 +144,29 @@ def groups_in(clean):
 
 
 def extract(html):
-    lines = html_to_lines(html)
+    raw_lines = html_to_lines(html, mark_headings=True)
+    lines = [line.removeprefix('@@HEADING@@') for line in raw_lines]
     text = '\n'.join(lines)
     users, hires, terminated, services, passwords = {}, [], [], [], {}
+    warnings = []
     kind = None
     last_user = None
-    for line in lines:
-        k = section_kind(line)
+    for raw_line, line in zip(raw_lines, lines):
+        header = re.split(r':(?![^()]*\))', line, maxsplit=1)
+        k = section_kind(header[0])
         if k:
             kind = k
+            last_user = None
+            if len(header) == 1 or not header[1].strip():
+                continue
+            line = header[1].strip()
+        elif raw_line.startswith('@@HEADING@@'):
+            if re.match(r'authorized (users?|administrators?)\b', line, re.I):
+                warnings.append('unparsed_accounts')
+            if re.match(r'(required|critical) services?\b', line, re.I) and not prose_services(line):
+                warnings.append('unparsed_services')
+            kind = None
+            last_user = None
             continue
         pw_line = re.match(r'^[\s*\-•]*(?:password|passwd|pass|pw)\s*[:=]\s*(\S+)', line, re.I)
         if pw_line and last_user and kind in ('admin', 'standard'):
@@ -162,8 +180,19 @@ def extract(html):
             kind = None
             continue
         if kind in ('admin', 'standard'):
+            if any(prose_accounts(line)):
+                kind = None
+                continue
             name, clean = entry_name(line)
-            if name:
+            if re.fullmatch(NAME + r'(?:\s*[,;]\s*' + NAME + r')+', clean):
+                names = [n.strip().lower() for n in re.split(r'[,;]', clean)]
+            else:
+                names = [name] if name else []
+            if not names and clean and not clean.lower().startswith(SKIP_PREFIX) and clean.lower() not in LABELS:
+                warnings.append('unparsed_accounts')
+            for name in names:
+                if name in users and users[name]['account_type'] != kind:
+                    warnings.append('conflicting_account_roles')
                 last_user = name
                 users[name] = {'name': name, 'account_type': kind, 'groups': groups_in(clean)}
                 pw = re.fullmatch(NAME + r'\s*:\s*(\S+)(?:\s*\(.*\))?', clean)
@@ -172,12 +201,16 @@ def extract(html):
         elif kind == 'services':
             clean = re.sub(r'^[\s*\-•#>\d.)]+', '', line).strip().lower()
             if clean and not clean.startswith(SKIP_PREFIX):
-                paren = re.findall(r'\(([a-z0-9_.-]+)\)', clean)
-                token = re.search(r'[a-z0-9_.-]+', clean)[0]
-                for s in ([token] + paren):
-                    s = SERVICE_ALIASES.get(s, s)
-                    if s not in services:
-                        services.append(s)
+                for part in re.split(r'[,;]|\band\b', clean):
+                    token = re.search(r'[a-z0-9_.-]+', part)
+                    if not token:
+                        continue
+                    paren = re.findall(r'\(([a-z0-9_.-]+)\)', part)
+                    for s in ([token[0]] + paren):
+                        s = s.removesuffix('.service')
+                        s = SERVICE_ALIASES.get(s, s)
+                        if s not in services:
+                            services.append(s)
         elif kind == 'terminated':
             name, _ = entry_name(line)
             if name:
@@ -189,15 +222,33 @@ def extract(html):
                               'groups': groups_in(clean)})
 
     p_hires, p_demote, p_promote, p_terminated = prose_accounts(text)
+    if p_demote & p_promote:
+        warnings.append('conflicting_account_roles')
+    known_role_targets = set(users) | {h['name'] for h in hires + p_hires}
+    if (p_demote | p_promote) - known_role_targets:
+        warnings.append('unknown_account_role_target')
+    for sentence in sentences(text):
+        if re.search(r'no longer[^.]*admin|\bnot\b[^.]{0,30}\badmin|\bdemot\w*|\bpromot\w*|admin(?:istrator)?\s+privileges', sentence, re.I):
+            new_hires, demotions, promotions, _ = prose_accounts(sentence)
+            if new_hires and re.search(r'as an? (?:standard|regular) user', sentence, re.I) and re.search(r'not an? admin', sentence, re.I):
+                continue
+            if not demotions and not promotions:
+                warnings.append('unparsed_account_roles')
     for h in p_hires:
         if h['name'] not in users and h['name'] not in [x['name'] for x in hires]:
             hires.append(h)
     for name in p_demote:
         if name in users:
             users[name]['account_type'] = 'standard'
+        for hire in hires:
+            if hire['name'] == name:
+                hire['account_type'] = 'standard'
     for name in p_promote:
         if name in users:
             users[name]['account_type'] = 'admin'
+        for hire in hires:
+            if hire['name'] == name:
+                hire['account_type'] = 'admin'
     terminated += [t for t in p_terminated if t not in users]
     for s in prose_services(text):
         if s not in services:
@@ -208,7 +259,7 @@ def extract(html):
         members = [x.lower() for x in re.split(r'\s*,\s*|\s+and\s+', m[2]) if re.fullmatch(NAME, x.strip())]
         groups_to_create.append({'name': m[1].lower(), 'members': members})
 
-    hints = []
+    hints = list(dict.fromkeys(warnings))
     checks = (('terminat|former employee|no longer (work|employ)|should be removed', 'terminated_users', bool(terminated)),
               (r'new (hire|employee|user|member)|recently (hired|added)|(needs?|should have) an? account', 'recent_hires', bool(hires)),
               (r'create (a |the )?(new )?group', 'groups_to_create', bool(groups_to_create)),
