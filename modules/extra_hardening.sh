@@ -358,6 +358,9 @@ run_extra_hardening() {
     extra_audit_apparmor
     extra_screen_lock
     extra_firefox_policy
+    if [[ -f "${README_FILE:-}" ]]; then
+        python3 "$SCRIPT_DIR/../lib/chromium_policy.py" "$README_FILE" || return 1
+    fi
     extra_mail_dns
     extra_ftp_root
     extra_web_direct

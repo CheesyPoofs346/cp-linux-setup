@@ -21,8 +21,18 @@ class SetupTests(unittest.TestCase):
             readme = destination / 'README practice.html'
             readme.write_text('<h1>Practice</h1>')
             key = 'dummy-$(touch ' + str(destination / 'injected') + ')'
+            # Setup's prerequisite prompt is unrelated to this PTY/config test.
+            # Stub absent tools so the test never reaches sudo/package installation.
+            tools = destination / 'bin'
+            tools.mkdir()
+            for tool in ('curl', 'jq', 'python3', 'perl', 'flock', 'timeout', 'unshare', 'mount', 'setpriv'):
+                if shutil.which(tool) is None:
+                    stub = tools / tool
+                    stub.write_text('#!/bin/sh\nexit 0\n')
+                    stub.chmod(0o755)
             master, slave = pty.openpty()
-            process = subprocess.Popen(['bash', str(destination / 'setup.sh')], stdin=slave, stdout=slave, stderr=slave)
+            process = subprocess.Popen(['bash', str(destination / 'setup.sh')], stdin=slave, stdout=slave, stderr=slave,
+                                       env=dict(os.environ, PATH=str(tools) + os.pathsep + os.environ['PATH']))
             os.close(slave)
             output = b''
             handled = set()

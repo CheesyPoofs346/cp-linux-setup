@@ -168,6 +168,10 @@ def extract(html):
             kind = None
             last_user = None
             continue
+        if line.lower().rstrip(':') in ('competition guidelines', 'forensics questions', 'unique identifier'):
+            kind = None
+            last_user = None
+            continue
         pw_line = re.match(r'^[\s*\-•]*(?:password|passwd|pass|pw)\s*[:=]\s*(\S+)', line, re.I)
         if pw_line and last_user and kind in ('admin', 'standard'):
             passwords[last_user] = pw_line[1]

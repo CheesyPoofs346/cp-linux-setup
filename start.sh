@@ -89,8 +89,8 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -sf|--skip-forensics)
-            export SKIP_FORENSICS=1
-            echo "[+] SKIP_FORENSICS=1 enabled: Forensics module will be bypassed for immediate scoring."
+            export SKIP_FORENSICS=1 FORENSICS_DET=0
+            echo "[+] SKIP_FORENSICS=1 enabled: Both forensic solvers skipped by explicit operator request; preserve completed answers and evidence."
             shift
             ;;
         *)
