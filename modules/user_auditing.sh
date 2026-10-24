@@ -71,6 +71,13 @@ get_current_admins() {
 # Check if user is a system account
 is_system_account() {
     local username="$1"
+    local entry uid shell
+    entry=$(getent passwd "$username") || return 1
+    uid=$(cut -d: -f3 <<< "$entry")
+    shell=$(cut -d: -f7 <<< "$entry")
+    if [[ "$uid" =~ ^[0-9]+$ && "$uid" -gt 0 && "$uid" -lt 1000 && ( "$shell" == */nologin || "$shell" == */false ) ]]; then
+        return 0  # Package/custom service identities are not human README users.
+    fi
 
     for sys_account in "${SYSTEM_ACCOUNTS[@]}"; do
         if [[ "$username" == "$sys_account" ]]; then
@@ -300,11 +307,11 @@ fix_root_uid_users() {
     return 0
 }
 
-# Remove hidden users (UID < 1000 but not system accounts)
+# Review unknown low-UID identities without deleting service accounts.
 remove_hidden_users() {
     log_section "Checking for Hidden Users"
 
-    local removed_count=0
+    local review_count=0
 
     # Find users with UID < 1000 that aren't in our system accounts list
     while IFS=: read -r username _ uid _; do
@@ -331,26 +338,14 @@ remove_hidden_users() {
             continue
         fi
 
-        # This is a hidden user
-        log_warn "Found hidden user: $username (UID: $uid)"
-
-        if safe_userdel -r "$username"; then
-            log_success "Removed hidden user: $username"
-            removed_count=$((removed_count + 1))
-        else
-            if safe_userdel "$username"; then
-                log_success "Removed hidden user (kept home): $username"
-                removed_count=$((removed_count + 1))
-            else
-                log_error "Failed to remove hidden user: $username"
-            fi
-        fi
+        log_warn "REVIEW: unknown low-UID account $username (UID: $uid); verify package/unit ownership before removal"
+        review_count=$((review_count + 1))
     done < /etc/passwd
 
-    if [[ $removed_count -eq 0 ]]; then
-        log_info "No hidden users found"
+    if [[ $review_count -eq 0 ]]; then
+        log_info "No unknown low-UID accounts require review"
     else
-        log_success "Removed $removed_count hidden user(s)"
+        log_warn "$review_count low-UID account(s) require manual review"
     fi
 
     return 0

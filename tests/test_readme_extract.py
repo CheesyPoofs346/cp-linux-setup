@@ -19,6 +19,10 @@ zed</pre>
 
 
 class ReadmeExtractTests(unittest.TestCase):
+    def test_service_list_ends_at_business_prose(self):
+        data=rx.extract('Authorized Administrators:\nalice\nAuthorized Users:\nbob\nCritical Services:\nOpenSSH (ssh), nginx, PostgreSQL, Samba (smbd), research-api.\n\nSSH on port 22 and the existing public key must continue working.\nThe web site and its API must return the ledger.\n')
+        self.assertEqual(set(data['critical_services']), {'ssh','nginx','postgresql','smbd','research-api'})
+
     def test_sections_and_validation(self):
         d = rx.extract(BASE)
         self.assertEqual({u['name']: u['account_type'] for u in d['all_users']},

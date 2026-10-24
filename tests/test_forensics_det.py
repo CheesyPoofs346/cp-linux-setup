@@ -31,6 +31,29 @@ class DetTests(unittest.TestCase):
     def ev(self, readme=''):
         return det.Evidence(str(self.root), readme)
 
+    def test_log_actor_requires_explicit_action_and_artifact(self):
+        logs=self.root/'var/log'; logs.mkdir(parents=True)
+        (logs/'custom-access.log').write_text('2025-03-01T10:00:00Z ghost installed unauthorized updater.timer\n')
+        result=det.solve(question('Which account installed the unauthorized updater.timer?'),self.ev())
+        self.assertEqual(result['answers'], ['ghost'])
+        self.assertIn('/var/log/custom-access.log:1', result['why'])
+
+    def test_log_actor_ambiguous_actors_not_guessed(self):
+        logs=self.root/'var/log'; logs.mkdir(parents=True)
+        (logs/'custom.log').write_text('ghost installed updater.timer\nben installed updater.timer\n')
+        self.assertIsNone(det.solve(question('Which account installed updater.timer?'),self.ev()))
+
+    def test_log_actor_does_not_infer_from_nearby_username(self):
+        logs=self.root/'var/log'; logs.mkdir(parents=True)
+        (logs/'custom.log').write_text('ghost logged in\nroot installed updater.timer\n')
+        result=det.solve(question('Which account installed updater.timer?'),self.ev())
+        self.assertEqual(result['answers'], ['root'])
+
+    def test_log_actor_unknown_identity_not_applied(self):
+        logs=self.root/'var/log'; logs.mkdir(parents=True)
+        (logs/'custom.log').write_text('imaginary installed updater.timer\n')
+        self.assertIsNone(det.solve(question('Which account installed updater.timer?'),self.ev()))
+
     def test_hidden_user_is_a_system_uid_account_with_a_shell(self):
         result = det.solve(question('A malicious hidden user was created. What is the username?', 3), self.ev())
         self.assertEqual(result['answers'], ['ghost'])

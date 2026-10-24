@@ -636,68 +636,13 @@ EOF
     return 0
 }
 
-# Enforce GRUB signature verification and remove insecure overrides
+# Boot trust and administrator credentials require a separately reviewed policy.
 enforce_grub_signature_checks() {
-    log_section "Enforcing GRUB Signature Verification"
-
-    local grub_default="/etc/default/grub"
-    local grub_custom="/etc/grub.d/40_custom"
-    local updated=false
-
-    if [[ -f "$grub_default" ]]; then
-        backup_file "$grub_default"
-
-        if grep -q "^GRUB_VERIFY_SIGNATURES" "$grub_default"; then
-            sed -i 's/^GRUB_VERIFY_SIGNATURES=.*/GRUB_VERIFY_SIGNATURES=true/' "$grub_default"
-        else
-            echo 'GRUB_VERIFY_SIGNATURES=true' >> "$grub_default"
-        fi
-
-        updated=true
-        log_success "✓ Enabled GRUB signature verification in $grub_default"
-    else
-        log_warn "$grub_default not found; skipping signature verification toggle"
-    fi
-
-    if [[ -f "$grub_custom" ]]; then
-        backup_file "$grub_custom"
-        local temp_file
-        temp_file=$(mktemp)
-        local removed=false
-        while IFS= read -r line; do
-            if [[ "$line" =~ ^set\s+superusers || "$line" =~ ^password ]]; then
-                removed=true
-                continue
-            fi
-            echo "$line" >> "$temp_file"
-        done < "$grub_custom"
-
-        if ! grep -q "^set check_signatures" "$temp_file"; then
-            echo "set check_signatures=enforce" >> "$temp_file"
-        fi
-
-        cat "$temp_file" > "$grub_custom"
-        rm -f "$temp_file"
-
-        if [[ "$removed" == true ]]; then
-            log_success "✓ Removed insecure GRUB superuser entries from $grub_custom"
-        else
-            log_info "No GRUB superuser entries found in $grub_custom"
-        fi
-
-        updated=true
-    else
-        log_info "$grub_custom not present; skipping custom GRUB hardening"
-    fi
-
-    if command_exists update-grub && [[ "$updated" == true ]]; then
-        if update-grub >/dev/null 2>&1; then
-            log_success "✓ Regenerated GRUB configuration with signature enforcement"
-        else
-            log_warn "Failed to regenerate GRUB configuration; run update-grub manually"
-        fi
-    fi
-
+    log_section "Reviewing GRUB Trust Policy"
+    # GPG enforcement requires detached signatures and enrolled trusted keys.
+    # Blindly enabling it can prevent boot; removing passwords weakens access.
+    # Preserve both vendor boot configuration and administrator credentials.
+    log_warn "REVIEW: preserve GRUB trust/password policy; validate signed artifacts and recovery access before changing boot enforcement"
     return 0
 }
 
@@ -1062,7 +1007,7 @@ print_os_settings_checklist() {
     echo "64. Screen timeout, locking, and power policies enforced (GNOME/Cinnamon)"
     echo "65. Process information hidden from other users (/proc hidepid=2)"
     echo "66. Sudo requires password, PTY, logging, and only approved groups"
-    echo "67. GRUB signature verification enforced and superuser overrides removed"
+    echo "67. GRUB trust/password policy preserved for manual review"
     echo "68. Loopback hosts entries ensured; custom mappings preserved for review"
     echo "69. GDM3 not configured to run under a custom user"
     echo "70. X Server TCP connections disabled"

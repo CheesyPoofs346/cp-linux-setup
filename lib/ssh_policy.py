@@ -24,6 +24,16 @@ def render(main, port=22, key_only=False, allow_users='', banner='/etc/issue.net
     marker = '# BEGIN CP SSH BASELINE'
     end = '# END CP SSH BASELINE'
     clean = re.sub(r'(?ms)^' + re.escape(marker) + r'\n.*?^' + re.escape(end) + r'\n?', '', main)
+    # Conditional access controls remain intact, but they cannot re-enable root
+    # or empty-password authentication after the global baseline denies them.
+    in_match=False
+    lines=[]
+    for line in clean.splitlines(keepends=True):
+        if re.match(r'^\s*Match\s',line,re.I): in_match=True
+        if in_match:
+            line=re.sub(r'(?i)^(\s*(?:PermitRootLogin|PermitEmptyPasswords)\s+)\S+',r'\1no',line)
+        lines.append(line)
+    clean=''.join(lines)
     settings = {
         'Port': str(port), 'PermitRootLogin': 'no', 'PermitEmptyPasswords': 'no',
         'UsePAM': 'yes', 'StrictModes': 'yes', 'PermitUserEnvironment': 'no',

@@ -5,6 +5,8 @@ import os
 import re
 import shlex
 import sys
+import subprocess
+from pathlib import Path
 
 PORTS = {
     'ssh': ('22/tcp',), 'sshd': ('22/tcp',), 'openssh': ('22/tcp',), 'openssh-server': ('22/tcp',),
@@ -23,7 +25,39 @@ PORTS = {
 }
 
 
-def plan(data, ssh_port=22, ssh_connection=None):
+def loopback_only(pid, text):
+    found=[]
+    for line in text.splitlines():
+        if not re.search(r'\bpid='+str(int(pid))+r'\b',line): continue
+        parts=line.split()
+        if len(parts)<6: return False
+        host=parts[4].rsplit(':',1)[0].strip('[]').split('%')[0]
+        try: found.append(ipaddress.ip_address(host).is_loopback)
+        except ValueError: return False
+    return bool(found) and all(found)
+
+
+def verified_local_services(data):
+    local=set()
+    try:
+        sockets=subprocess.run(['ss','-H','-lntup'],capture_output=True,text=True,timeout=10,check=True).stdout
+        for raw in data.get('critical_services',[]):
+            name=raw.lower().removesuffix('.service')
+            if name in PORTS or not re.fullmatch(r'[a-z0-9_@.-]+',name): continue
+            unit=name+'.service'
+            result=subprocess.run(['systemctl','show','-p','MainPID','--value',unit],capture_output=True,text=True,timeout=10)
+            if result.returncode or not result.stdout.strip().isdigit(): continue
+            pid=int(result.stdout.strip())
+            if pid<=0: continue
+            groups=Path(f'/proc/{pid}/cgroup').read_text()
+            if not any(line.endswith('/'+unit) for line in groups.splitlines()): continue
+            if loopback_only(pid,sockets): local.add(name)
+    except (OSError,subprocess.SubprocessError):
+        pass  # Unverified services still fail closed in plan().
+    return local
+
+
+def plan(data, ssh_port=22, ssh_connection=None, local_only=()):
     services = data.get('critical_services') if isinstance(data, dict) else None
     if not isinstance(services, list) or not all(isinstance(s, str) for s in services):
         raise ValueError('Validated critical_services array required')
@@ -45,6 +79,8 @@ def plan(data, ssh_port=22, ssh_connection=None):
         rules.add(f'{port}/tcp')
     for raw in services:
         service = raw.lower().removesuffix('.service')
+        if service in local_only:
+            continue
         if service not in PORTS:
             raise ValueError(f'Firewall review needed for required service {raw}; unknown/custom or dynamic ports')
         for port in PORTS[service]:
@@ -89,7 +125,8 @@ if __name__ == '__main__':
         if '--check-rules' in sys.argv:
             check_existing(sys.stdin.read(), sys.argv[2].splitlines())
         else:
-            print('\n'.join(plan(json.load(sys.stdin), os.environ.get('SSH_PORT', '22'), os.environ.get('SSH_CONNECTION'))))
+            data=json.load(sys.stdin)
+            print('\n'.join(plan(data, os.environ.get('SSH_PORT', '22'), os.environ.get('SSH_CONNECTION'),verified_local_services(data))))
     except (ValueError, TypeError, IndexError) as error:
         print(str(error), file=sys.stderr)
         sys.exit(2)

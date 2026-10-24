@@ -2,7 +2,7 @@
 
 **Goal:** Build and boot a reproducible advanced Ubuntu practice VM, independently score it, improve remediation from observed failures, and verify a second seed.
 
-**Architecture:** VMware guest provisioned with cloud-init from a SHA256-verified official VMDK. Scenario generation and scorer live under practice/advanced; remediation remains in existing modules. Host transport is SSH with a lab-only key.
+**Architecture:** VMware guest provisioned with cloud-init from a SHA256-verified official VMDK. Scenario generation and scorer live under practice/advanced; remediation remains in existing modules. Host transport uses VMware guest operations with synthetic lab credentials; a separate observer VM performs real SSH/network probes.
 
 **Tech stack:** Python standard library, PowerShell, VMware Workstation, Ubuntu 24.04, cloud-init, OpenSSH.
 

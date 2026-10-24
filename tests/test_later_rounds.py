@@ -109,6 +109,13 @@ scan_service_specific_artifacts
 
 
 class SSHPolicyTests(unittest.TestCase):
+    def test_match_cannot_allow_empty_passwords_or_root(self):
+        source='Match Group staff\n PermitEmptyPasswords yes\n PermitRootLogin yes\n ForceCommand internal-sftp\n'
+        result=render(source)
+        self.assertNotIn('PermitEmptyPasswords yes',result)
+        self.assertNotIn('PermitRootLogin yes',result)
+        self.assertIn('ForceCommand internal-sftp',result)
+
     def test_match_blocks_are_preserved_and_global_prefix_is_idempotent(self):
         original = 'Include /etc/ssh/sshd_config.d/*.conf\nPort 2222\nMatch User backup\n    ForceCommand internal-sftp\n    X11Forwarding yes\n'
         new = render(original, port=2222)
