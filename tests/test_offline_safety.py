@@ -15,6 +15,39 @@ import score_tracker
 
 
 class OfflineSafetyTests(unittest.TestCase):
+    def test_grub_policy_preserves_passwords_and_does_not_force_unsigned_boot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);(root/'etc/default').mkdir(parents=True);(root/'etc/grub.d').mkdir()
+            default=root/'etc/default/grub';custom=root/'etc/grub.d/40_custom'
+            default.write_text('GRUB_TIMEOUT=0\n')
+            custom.write_text('#!/bin/sh\nexec tail -n +3 $0\nset superusers="admin"\npassword_pbkdf2 admin existing-policy\n')
+            before=(default.read_text(),custom.read_text())
+            script='''source "$1"
+backup_file() { :; }
+update-grub() { :; }
+body=$(declare -f enforce_grub_signature_checks)
+body=${body//\\/etc\\//$TEST_ROOT/etc/}
+eval "$body"
+enforce_grub_signature_checks
+'''
+            result=subprocess.run(['bash','-c',script,'test',str(ROOT/'modules/os_settings.sh')],env={**os.environ,'TEST_ROOT':str(root)},capture_output=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertEqual((default.read_text(),custom.read_text()),before)
+
+    def test_unknown_locked_service_identity_is_preserved(self):
+        script='''source "$1"
+getent() { printf '%s\\n' 'businessapi:x:992:992::/nonexistent:/usr/sbin/nologin'; }
+is_system_account businessapi
+'''
+        result=subprocess.run(['bash','-c',script,'test',str(ROOT/'modules/user_auditing.sh')],capture_output=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+
+    def test_sentinel_package_pause_keeps_update_timers_running(self):
+        calls=[]
+        with patch.object(sentinel,'_APT_QUIET',[]), patch.object(sentinel.os,'geteuid',return_value=0), patch.object(sentinel,'run',side_effect=lambda args,**kw:calls.append(args)):
+            sentinel.quiesce_apt()
+        self.assertFalse(any(arg.endswith('.timer') for call in calls for arg in call))
+
     def test_gdm_configuration_does_not_create_a_stray_file(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

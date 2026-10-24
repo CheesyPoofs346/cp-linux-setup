@@ -567,7 +567,7 @@ def quiesce_apt():
     if _APT_QUIET or os.geteuid() != 0:
         return
     _APT_QUIET.append(1)
-    for unit in ('unattended-upgrades.service', 'apt-daily.service', 'apt-daily-upgrade.service', 'apt-daily.timer', 'apt-daily-upgrade.timer'):
+    for unit in ('unattended-upgrades.service', 'apt-daily.service', 'apt-daily-upgrade.service'):
         run(['systemctl', 'stop', unit], timeout=60)
     run(['pkill', '-f', 'unattended-upgrade'], timeout=30)
     run(['pkill', '-f', 'apt.systemd.daily'], timeout=30)

@@ -176,6 +176,9 @@ def extract(html):
         if pw_line and last_user and kind in ('admin', 'standard'):
             passwords[last_user] = pw_line[1]
             continue
+        if kind == 'services' and not line.startswith(('-', '*', '•')) and re.search(r'\b(must|should|shall|needs? to|required to)\b',line,re.I):
+            kind=None  # Business instructions after the service list are not service names.
+            continue
         if kind in ('admin', 'standard') and line.rstrip().endswith('.') and not line.startswith(('-', '*', '•')) and (len(line.split()) >= 8 or re.search(r'\b(is|are|must|should|requires?|needs?)\b', line, re.I)):
             kind = None   # a full sentence ends the list
             continue
@@ -211,7 +214,7 @@ def extract(html):
                         continue
                     paren = re.findall(r'\(([a-z0-9_.-]+)\)', part)
                     for s in ([token[0]] + paren):
-                        s = s.removesuffix('.service')
+                        s = s.rstrip('.').removesuffix('.service')
                         s = SERVICE_ALIASES.get(s, s)
                         if s not in services:
                             services.append(s)

@@ -89,3 +89,27 @@ access preservation, final required-service/configuration checks, capability/ACL
 and disguised-file investigation, NFS/SNMP indicators, and verification boundaries.
 Read `data/postflight.txt` alongside module results and the official score. A review
 or failure is now propagated instead of being hidden behind a module success log.
+
+
+## Advanced Linux VM practice
+
+[The original advanced lab](practice/advanced/README.md) adds a real Ubuntu 24.04
+VM, 66 independent security checks, ten business-availability penalties, a
+four-check onboarding inject, and structurally different seeds. Research and
+scope limits are recorded separately from measured results.
+
+Live testing exposed configuration replacement that broke business services,
+non-login service identities mistaken for unauthorized users, SSH Match bypasses,
+update timers stopped during package maintenance, and a legacy GRUB change that
+prevented reboot. The revised policies preserve service configuration and
+identities, validate effective settings, retain update timers, and preserve boot
+trust/password policy for manual review. nginx header inheritance is retained.
+
+Only byte-identical copied utilities and interpreter capabilities under
+`/usr/local` are automatically stripped when the README explicitly forbids extra
+privileged programs. Unknown helpers, persistence and database-role decisions
+remain analyst work. Backups and ledgers record changes. Service availability and
+independent grading remain separate from module success.
+
+This is a server lab: it does not validate every desktop/browser path, AlmaLinux,
+Windows, Cisco, a full competition network, or official scoring compatibility.

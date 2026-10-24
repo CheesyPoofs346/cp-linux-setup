@@ -594,6 +594,38 @@ def solve_file_dir(ev, question, number=0):
             'why': f'{best[1]} matching file(s) in {best[0]}', 'candidates': [r[0] for r in ranked[:5]]}
 
 
+def solve_log_actor(ev, question, number=0):
+    """Answer only explicit actor/action/artifact records, never nearby names."""
+    body = question_body(question['content'])
+    artifacts = set(re.findall(r'(?<![\w.-])([\w@.-]+\.(?:timer|service|socket|sh|py))(?![\w.-])', body))
+    action = re.search(r'\b(installed|created|modified|enabled|started|deleted)\b', body, re.I)
+    if len(artifacts) != 1 or not action:
+        return None
+    artifact = next(iter(artifacts))
+    known = {row['name'] for row in ev.passwd()}
+    actor_pattern = re.compile(r'(?<![\w.-])([a-z_][a-z0-9_.-]*)\s+' + re.escape(action.group()) + r'\b', re.I)
+    matches = {}
+    budget = 20_000_000
+    paths = sorted(ev.p('/var/log').glob('*.log')) + sorted(ev.p('/var/log').glob('*/*.log'))
+    for path in paths[:200]:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 1_000_000:
+            continue
+        budget -= path.stat().st_size
+        if budget < 0:
+            return None  # Do not declare uniqueness after exhausting the scan budget.
+        for line_number, line in enumerate(path.read_text(errors='replace').splitlines(), 1):
+            if not re.search(r'(?<![\w.-])' + re.escape(artifact) + r'(?![\w.-])', line):
+                continue
+            found = actor_pattern.search(line)
+            if found and found.group(1) in known:
+                matches.setdefault(found.group(1), []).append(f'{ev.logical(path)}:{line_number}: {line[:300]}')
+    if len(matches) == 1:
+        actor = next(iter(matches))
+        return {'answers': [actor], 'confidence': 'high',
+                'why': 'Explicit actor/action/artifact log evidence: ' + matches[actor][0]}
+    return None
+
+
 def solve_uid_zero(ev, question, number=0):
     candidates = [u['name'] for u in ev.passwd() if u['uid'] == 0 and u['name'] != 'root']
     if len(candidates) != 1:
@@ -602,6 +634,7 @@ def solve_uid_zero(ev, question, number=0):
 
 
 SOLVERS = [
+    (re.compile(r'(which|what).*(account|user).*(installed|created|modified|enabled|started|deleted)', re.I), solve_log_actor, 'user'),
     (re.compile(r'\b(?:uid|user id)\s*(?:of\s*)?(?:=|:)?\s*0\b', re.I), solve_uid_zero, 'user'),
     (re.compile(r'(director|folder|path|location).{0,80}(mp3|mp4|music|audio|video|media|picture|photo|\.\w{3,4} files)|(mp3|mp4|music|audio|video|media)[^.\n]{0,60}(director|folder|located|location)', re.I | re.S), solve_file_dir, 'path'),
     (re.compile(r'hidden (user|account)|secret (user|account)|user.*(was|has been) created.*(after|attack)|malicious.*user(name)?', re.I), solve_hidden_user, 'user'),

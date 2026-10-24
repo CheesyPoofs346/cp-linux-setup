@@ -101,3 +101,14 @@ validation/rollback, preserved Match blocks and password access, final service a
 effective-policy checks, additional privilege/server indicators, Mint refresh
 verification, and fixture/CI evidence. These additions do not upgrade the inventory
 to universal automatic remediation or prove a future competition score.
+
+
+## Advanced VM evidence
+
+The original [advanced Ubuntu 24.04 server lab](../practice/advanced/README.md)
+exercises interacting SSH/nginx/PostgreSQL/Samba/API services, data preservation,
+separate observer probes, onboarding and reboot persistence across two seeds.
+This provides bounded live evidence for the tested paths; the family table still
+includes partial and review-only coverage. PostgreSQL roles/schema privileges,
+unknown persistence and disguised executables remain analyst work. Boot trust
+and administrator password configuration is preserved for manual review.

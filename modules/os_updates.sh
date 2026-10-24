@@ -135,7 +135,9 @@ check_reboot_required() {
 enable_automatic_apt_updates() {
     log_section "Configuring Automatic APT Updates"
 
-    local auto_conf="/etc/apt/apt.conf.d/20auto-upgrades"
+    # A later planted/vendor file may override 20auto-upgrades. Keep that file
+    # intact and own an explicitly ordered policy, then verify effective values.
+    local auto_conf="/etc/apt/apt.conf.d/zz-cp-auto-upgrades"
     backup_file "$auto_conf" 2>/dev/null || true
 
     cat >"$auto_conf" <<'EOF'
@@ -146,6 +148,10 @@ APT::Periodic::AutocleanInterval "7";
 EOF
 
     chmod 644 "$auto_conf" || return 1
+    local effective
+    effective=$(apt-config dump) || return 1
+    grep -Fx 'APT::Periodic::Update-Package-Lists "1";' <<< "$effective" >/dev/null || return 1
+    grep -Fx 'APT::Periodic::Unattended-Upgrade "1";' <<< "$effective" >/dev/null || return 1
     log_success "Automatic APT update policies enabled"
 }
 
@@ -360,6 +366,7 @@ run_os_updates() {
 
     # Configure automatic updates
     configure_unattended_upgrades || return 1
+    enable_automatic_apt_updates || return 1
 
     # Enable systemd timers for automatic updates
     enable_auto_update_timers || return 1
