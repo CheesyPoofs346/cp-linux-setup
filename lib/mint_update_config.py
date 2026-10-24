@@ -1,4 +1,4 @@
-"""Repair Mint 21 official sources and native update preferences without a GUI.
+"""Configure native Mint preferences; restore official sources only for Mint 21.
 
 Only the official Mint source file is restored; additional repositories are preserved.
 --root supports offline regression fixtures. No package commands run here.
@@ -26,21 +26,16 @@ def write(root, name, content):
 def configure(root, restore_sources=False):
     release = dict(re.findall(r'^(\w+)=["\']?([^\n"\']+)',
                               (root / 'etc/os-release').read_text(), re.M))
-    if release.get('ID') != 'linuxmint' or not release.get('VERSION_ID', '').startswith('21'):
-        raise ValueError('This helper supports Mint 21 only')
+    if release.get('ID') != 'linuxmint':
+        raise ValueError('This helper requires Linux Mint')
+    major = release.get('VERSION_ID', '').split('.')[0]
+    base = release.get('UBUNTU_CODENAME') or {'21': 'jammy', '22': 'noble'}.get(major, '')
+    if not re.fullmatch(r'[a-z]+', base):
+        raise ValueError('Cannot establish the Ubuntu base; refusing origin changes')
     codename = release.get('VERSION_CODENAME', '')
-    if codename not in ('vanessa', 'vera', 'victoria', 'virginia'):
-        raise ValueError('Unrecognized Mint 21 codename; refusing source changes')
-    if restore_sources:
-        write(root, '/etc/apt/sources.list.d/official-package-repositories.list',
-              f'deb http://packages.linuxmint.com {codename} main upstream import backport\n'
-              'deb http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse\n'
-              'deb http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse\n'
-              'deb http://archive.ubuntu.com/ubuntu jammy-backports main restricted universe multiverse\n'
-              'deb http://security.ubuntu.com/ubuntu jammy-security main restricted universe multiverse\n')
-    write(root, '/etc/apt/apt.conf.d/99-cp-origins',
-          'Unattended-Upgrade::Allowed-Origins {\n'
-          '    "Ubuntu:jammy-security";\n    "Ubuntu:jammy-updates";\n};\n')
+    if restore_sources and (major != '21' or codename not in ('vanessa', 'vera', 'victoria', 'virginia')):
+        raise ValueError('Official source restoration requires a recognized Mint 21 codename')
+    # Validate the installed schema before making any configuration changes.
     schema = root / 'usr/share/glib-2.0/schemas/com.linuxmint.updates.gschema.xml'
     if not schema.exists():
         raise ValueError('Mint Update Manager schema missing')
@@ -52,6 +47,16 @@ def configure(root, restore_sources=False):
                 'auto-update-flatpaks': 'true', 'auto-update-cinnamon-spices': 'true'}
     if not set(settings).issubset(supported):
         raise ValueError('Mint schema lacks required refresh/app-update keys')
+    if restore_sources:
+        write(root, '/etc/apt/sources.list.d/official-package-repositories.list',
+              f'deb http://packages.linuxmint.com {codename} main upstream import backport\n'
+              'deb http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse\n'
+              'deb http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse\n'
+              'deb http://archive.ubuntu.com/ubuntu jammy-backports main restricted universe multiverse\n'
+              'deb http://security.ubuntu.com/ubuntu jammy-security main restricted universe multiverse\n')
+    write(root, '/etc/apt/apt.conf.d/99-cp-origins',
+          'Unattended-Upgrade::Allowed-Origins {\n'
+          f'    "Ubuntu:{base}-security";\n    "Ubuntu:{base}-updates";\n}};\n')
     write(root, '/etc/dconf/db/local.d/01-mintupdate', '[com/linuxmint/updates]\n' +
           ''.join(f'{key}={value}\n' for key, value in settings.items()))
     # Defaults alone lose to existing per-user values. Lock only supported update keys.

@@ -4,7 +4,7 @@ Reviewed 2026-10-23. This is a coverage inventory, not a complete CyberPatriot r
 
 **Implemented** means a bounded policy exists with focused tests; **partial** means selected cases exist; **review** needs an image-specific decision; **missing** has no complete implementation; **outside-linux** requires other tooling. No label means universal safe remediation. Sources describe task families; implementation assessments come from this repository, not those sources.
 
-Coverage totals: partial: 44, review: 4, implemented: 3, missing: 4, outside-linux: 3. Total: 58 families.
+Coverage totals: partial: 48, review: 2, implemented: 3, missing: 2, outside-linux: 3. Total: 58 families.
 
 | Vulnerability/task family | Coverage | Implementation | Boundary / next action |
 |---|---|---|---|
@@ -29,8 +29,8 @@ Coverage totals: partial: 44, review: 4, implemented: 3, missing: 4, outside-lin
 | MySQL/MariaDB security | partial | [modules/mysql_hardening.sh](../modules/mysql_hardening.sh) | Actual credentials, grants and application connectivity need verification. |
 | Samba share security | partial | [modules/samba_hardening.sh](../modules/samba_hardening.sh) | Custom share ACLs, domain roles and client access need review. |
 | DNS and mail-server settings | partial | [modules/extra_hardening.sh](../modules/extra_hardening.sh) | Selected directives and standard firewall ports; not complete DNS/mail deployment validation. |
-| NFS/RPC server roles | review | [lib/firewall_policy.py](../lib/firewall_policy.py) | Dynamic/unknown service requirements stop firewall planning; exports and RPC roles require manual review. |
-| SNMP communities and access control | review | [lib/firewall_policy.py](../lib/firewall_policy.py) | Standard port mapping is not SNMP authentication or community hardening. |
+| NFS/RPC server roles | partial | [lib/privilege_audit.py](../lib/privilege_audit.py) | Detects remote-root trust and wildcard write exports. Dynamic ports, export changes and client access still require review. |
+| SNMP communities and access control | partial | [lib/privilege_audit.py](../lib/privilege_audit.py) | Detects default communities and community write access without recording secrets. Manager/VACM remediation requires explicit requirements. |
 | Required-service preservation | partial | [lib/utils.sh](../lib/utils.sh) | Aliases/dependencies guarded; running service does not prove end-to-end reachability. |
 | Prohibited packages and services | partial | [modules/unwanted_software.sh](../modules/unwanted_software.sh) | Known lists and README exceptions; custom binaries and disguised packages can remain. |
 | OS and security package updates | partial | [modules/os_updates.sh](../modules/os_updates.sh) | SH7 update/reboot evidence exists for an earlier revision; repositories and failures vary. |
@@ -42,8 +42,8 @@ Coverage totals: partial: 44, review: 4, implemented: 3, missing: 4, outside-lin
 | Log directory permissions | implemented | [modules/os_settings.sh](../modules/os_settings.sh) | Corrects /var/log root directory to root:root 0755; does not certify every log file ACL. |
 | SUID/SGID executables | partial | [lib/sentinel.py](../lib/sentinel.py) | Selected findings; unusual legitimate executables and arbitrary binaries need review. |
 | World-writable files/directories | partial | [modules/os_settings.sh](../modules/os_settings.sh) | Broad checks are not a safe universal permission policy for application data. |
-| POSIX ACL abuse | missing | — | No complete ACL inventory/remediation policy; inspect getfacl and legitimate access requirements. |
-| File capability abuse | missing | — | No complete getcap inventory or application-aware setcap remediation. |
+| POSIX ACL abuse | partial | [lib/privilege_audit.py](../lib/privilege_audit.py) | Selected sensitive paths; effective named ACL grants honor masks. Review only; legitimate delegation is preserved. |
+| File capability abuse | partial | [lib/privilege_audit.py](../lib/privilege_audit.py) | Bounded capability inventory flags selected privilege boundaries. No blanket setcap removal. |
 | Immutable attributes | partial | [modules/malware.sh](../modules/malware.sh) | Selected handling; legitimate immutable settings and unusual files need review. |
 | Hosts mappings and local name resolution | implemented | [modules/os_settings.sh](../modules/os_settings.sh) | Preserves custom mappings and adds missing localhost/hostname entries; malicious mappings still require review. |
 | Cron persistence | partial | [lib/sentinel.py](../lib/sentinel.py) | Known suspicious command patterns; arbitrary benign-looking jobs need investigation. |
@@ -93,3 +93,11 @@ Prioritize manual investigation of ACL/capability abuse, custom apps, unusual au
 - **K2: [Linux kernel IP sysctl documentation](https://www.kernel.org/doc/html/latest/networking/ip-sysctl.html)** — Networking role dependence; do not blindly apply a desktop policy to routers.
 
 Official training resources may link answer keys for released exercises; no current active-round key was obtained. Community practice images are independent author material and their difficulty/score claims are not official classifications. Kernel documentation supports setting semantics, not CyberPatriot scoring requirements.
+
+## Reliability expansion
+
+The [later-round report](LATER_ROUND_RELIABILITY.md) documents SSH transaction
+validation/rollback, preserved Match blocks and password access, final service and
+effective-policy checks, additional privilege/server indicators, Mint refresh
+verification, and fixture/CI evidence. These additions do not upgrade the inventory
+to universal automatic remediation or prove a future competition score.

@@ -81,3 +81,11 @@ and verifying your answers. Scoring remains the authority, not module PASS statu
 Validation uses offline fixtures and Linux command stubs, not the scored image.
 The final Round 1 five-point check was never confirmed and is not claimed solved.
 Schema reference: https://github.com/linuxmint/mintupdate/blob/master.mint21/usr/share/glib-2.0/schemas/com.linuxmint.updates.gschema.xml
+
+## Required-service verification and later-round investigation
+
+See [later-round reliability](docs/LATER_ROUND_RELIABILITY.md) for SSH rollback and
+access preservation, final required-service/configuration checks, capability/ACL
+and disguised-file investigation, NFS/SNMP indicators, and verification boundaries.
+Read `data/postflight.txt` alongside module results and the official score. A review
+or failure is now propagated instead of being hidden behind a module success log.

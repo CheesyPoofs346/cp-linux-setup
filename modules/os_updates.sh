@@ -143,34 +143,19 @@ APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Download-Upgradeable-Packages "1";
 APT::Periodic::Unattended-Upgrade "1";
 APT::Periodic::AutocleanInterval "7";
-APT::Periodic::Autoremove "1";
-APT::Periodic::AutoremoveInterval "7";
 EOF
 
+    chmod 644 "$auto_conf" || return 1
     log_success "Automatic APT update policies enabled"
 }
 
 # Ensure unattended-upgrades will clean up old kernels and dependencies
 configure_unattended_cleanup_policy() {
-    log_section "Configuring Unattended-Upgrades Cleanup"
-
-    local unattended_conf="/etc/apt/apt.conf.d/50unattended-upgrades"
-
-    if [[ -f "$unattended_conf" ]]; then
-        backup_file "$unattended_conf"
-    fi
-
-    touch "$unattended_conf"
-
-    if ! grep -q "Remove-Unused-Kernel-Packages" "$unattended_conf"; then
-        echo "Unattended-Upgrade::Remove-Unused-Kernel-Packages \"true\";" >>"$unattended_conf"
-    fi
-
-    if ! grep -q "Remove-Unused-Dependencies" "$unattended_conf"; then
-        echo "Unattended-Upgrade::Remove-Unused-Dependencies \"true\";" >>"$unattended_conf"
-    fi
-
-    log_success "Unattended-upgrades cleanup policies configured"
+    # Owned override: a commented vendor default is not an enabled setting.
+    local path=/etc/apt/apt.conf.d/99-cp-cleanup
+    [[ ! -f "$path" ]] || backup_file "$path" || return 1
+    printf 'Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";\nUnattended-Upgrade::Remove-Unused-Dependencies "true";\n' > "$path" || return 1
+    chmod 644 "$path" || return 1
 }
 
 # Create a timer to run flatpak updates automatically

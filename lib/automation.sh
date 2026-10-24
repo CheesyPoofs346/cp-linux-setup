@@ -21,6 +21,7 @@ quiesce_apt() {
     done
     pgrep -f 'unattended-upgrade|apt.systemd.daily' >/dev/null 2>&1 && pkill -f 'unattended-upgrade|apt.systemd.daily' 2>/dev/null
     printf 'DPkg::Lock::Timeout "300";\n' > /etc/apt/apt.conf.d/99cp-lock-timeout 2>/dev/null
+    chmod 644 /etc/apt/apt.conf.d/99cp-lock-timeout || return 1
     return 0
 }
 
@@ -313,6 +314,14 @@ run_auto() {
             repair_operator_aging
         fi
     fi
+    # Independently verify effective policy and required service health after all mutations.
+    local postflight_status=0
+    python3 "$ENGINE_DIR/lib/postflight.py" || postflight_status=$?
+    case "$postflight_status" in
+        0) printf 'postflight\tPASS\n' >> "$report" ;;
+        2) printf 'postflight\tMANUAL_REVIEW\n' >> "$report"; reviews=$((reviews + 1)) ;;
+        *) printf 'postflight\tFAILED\n' >> "$report"; any_failed=1 ;;
+    esac
     log_warn "Module status is not an image score. Check forensics, README-specific requirements, required services, and the official scoring report."
     (( failed == 0 && any_failed == 0 )) || return 1
     # A review-needed run must not look like complete success to callers.
