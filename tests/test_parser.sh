@@ -13,12 +13,12 @@ GOOD='{"all_users":[{"name":"operator","account_type":"admin","groups":[]},{"nam
 invoke_readme_extraction() { echo "FAIL: AI called for a cleanly structured README"; return 1; }
 parse_readme "$TEST_DIR/README.html"
 [[ "$README_PARSED" == 1 ]]
-# AI omits a user: deterministic users win, AI-only fields (terminated) are kept.
+# AI omits a user: deterministic users win, unbacked AI-only account actions are discarded.
 OMIT=$(jq '.all_users |= .[0:1] | .terminated_users = ["mallory"]' <<<"$GOOD")
 invoke_readme_extraction() { printf '%s\n' "$OMIT"; }
 README_AI=always AUTO_REMEDIATE=1 parse_readme "$TEST_DIR/README.html"
 [[ "$(jq -r '[.all_users[].name] | join(",")' <<<"$README_DATA")" == operator,member ]]
-[[ "$(jq -r '.terminated_users | join(",")' <<<"$README_DATA")" == mallory ]]
+[[ "$(jq '.terminated_users | length' <<<"$README_DATA")" == 0 ]]
 # AI call fails: deterministic parse still authorizes the README's explicit lists.
 invoke_readme_extraction() { return 28; }
 parse_readme "$TEST_DIR/README.html"

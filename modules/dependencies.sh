@@ -14,12 +14,14 @@ run_dependencies() {
 
     log_info "Checking and installing required dependencies..."
 
-    local packages=(curl jq)
+    local packages=(curl:curl jq:jq acl:getfacl libcap2-bin:getcap)
     local missing=()
 
+    local tool
     for pkg in "${packages[@]}"; do
-        if ! command_exists "$pkg"; then
-            missing+=("$pkg")
+        tool=${pkg#*:}
+        if ! command_exists "$tool"; then
+            missing+=("${pkg%%:*}")
         fi
     done
 
@@ -32,7 +34,8 @@ run_dependencies() {
             if apt-get install -y "$pkg" >/dev/null 2>&1; then
                 log_success "$pkg installed successfully"
             else
-                log_warn "Failed to install $pkg (continuing)"
+                log_error "Failed to install required dependency $pkg"
+                return 1
             fi
         done
     else

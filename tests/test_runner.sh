@@ -34,6 +34,11 @@ snapshot_main_account() { return 0; }
 check_guard_support() { return 0; }
 check_main_account() { return 0; }
 run_anomaly_audit() { return 0; }
+quiesce_apt() { return 0; }
+clear_immutable_flags() { return 0; }
+repair_package_state() { return 0; }
+repair_operator_aging() { return 0; }
+python3() { [[ "$*" != *postflight.py* ]] || return 0; command python3 "$@"; }
 review_auto_plan() { return 0; }
 peer_approved() { return 0; }
 run_module() { return 1; }
@@ -99,3 +104,13 @@ status=0
 run_auto </dev/null || status=$?
 [[ "$status" == 2 && ! -e "$TEST_DIR/cleanup-after-unsolved" ]] || { echo 'FAIL: unresolved forensics allowed cleanup'; exit 1; }
 echo 'PASS: unresolved forensics pauses before evidence-changing modules'
+
+export FORENSICS_DET=0 SENTINEL=0
+timeout() { return 0; }
+python3() { [[ "$*" != *postflight.py* ]] || return "$POSTFLIGHT_STATUS"; return 0; }
+for POSTFLIGHT_STATUS in 1 2; do
+    status=0
+    run_auto </dev/null || status=$?
+    [[ "$status" == "$POSTFLIGHT_STATUS" ]] || { echo "FAIL: postflight status $POSTFLIGHT_STATUS was lost ($status)"; exit 1; }
+done
+echo 'PASS: postflight failures and review requests propagate to the runner exit status'

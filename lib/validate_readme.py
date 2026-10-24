@@ -64,6 +64,10 @@ def extract_text_sections(text):
                 sections.append((current_h, current_c))
             current_h = line_clean
             current_c = []
+        elif lower in ('competition guidelines', 'forensics questions', 'unique identifier'):
+            if current_h is not None:
+                sections.append((current_h, current_c))
+            current_h, current_c = None, []
         elif current_h is not None:
             current_c.append(line + '\n')
     if current_h is not None:
@@ -147,6 +151,8 @@ def validate(html, data):
                 if not clean_line:
                     continue
                 lower_line = clean_line.lower()
+                if re.match(r'^(password|passwd|pass|pw)\s*[:=]', lower_line):
+                    continue
                 if any(lower_line.startswith(prefix) for prefix in ('none', 'n/a', 'note:', 'note ', 'do not', 'all other', 'these users', 'the following')):
                     continue
                 match = re.fullmatch(r'([a-zA-Z_][a-zA-Z0-9_-]*\$?)(?:\s*:\s*.*|\s*\([^\n]*\))?', clean_line)
@@ -188,10 +194,14 @@ def validate(html, data):
     if services is not None and len(services) > 0:
         if not all(isinstance(s, str) for s in data['critical_services']) or set(data['critical_services']) != set(services):
             raise ValueError('AI critical services disagree with README')
-    # Additional account creation/deletion requires manual verification only in strict mode
-    if not auto_rem:
-        if data['recent_hires'] or data['terminated_users'] or data['groups_to_create'] or data['system_users_to_restrict']:
-            raise ValueError('Additional account/group actions require manual verification')
+    # Automatic mode is not permission for a model to invent deletions, hires or
+    # group membership. Independently match all supported account actions to source.
+    from readme_extract import extract
+    source_actions = extract(html)
+    for field in ('recent_hires', 'terminated_users', 'groups_to_create', 'system_users_to_restrict'):
+        canonical = lambda values: sorted(json.dumps(value, sort_keys=True) for value in values)
+        if canonical(data[field]) != canonical(source_actions[field]):
+            raise ValueError('Account/group action lacks matching README evidence: ' + field)
     return len(expected)
 
 

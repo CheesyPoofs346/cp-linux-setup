@@ -50,3 +50,42 @@ Based on [gobbler56/cp-linux-auto](https://github.com/gobbler56/cp-linux-auto), 
 ## Coverage and conservative policies
 
 See [the researched coverage inventory](docs/COVERAGE.md) for supported families, partial coverage and missing cases. The kernel baseline preserves unrelated settings, IPv6 and forwarding roles. Existing aggressive settings from older versions require manual review or a clean snapshot. Firewall planning uses standard declared-service ports and stops on unknown/dynamic services or conflicting global denies. Custom ports, source-specific ACLs and application connectivity still require validation. Use the VM console; sudo can remove SSH connection metadata.
+
+## Round 1 reliability fixes
+
+The Mint 21 update path now restores the official repositories for the installed
+Mint codename before refreshing APT, including Ubuntu security/updates/backports.
+The first changed copy is retained with `.before-round1-fix`. Additional repository
+files are preserved. Review image requirements before using this practice tool.
+
+Full update mode permits new dependencies (including kernels), refuses package
+removals, preserves modified configuration files, upgrades installed critical apps,
+and updates existing system/user Flatpak installations. Failed downloads, upgrades,
+or remaining updates cannot be reported as fully up to date. Reboots remain manual.
+
+Native Mint automation and supported refresh/app-update preferences replace guessed
+schema keys. Startup refresh is 10 minutes, subsequent refreshes every two hours;
+Flatpak and Cinnamon spice automatic updates are enabled. The dconf defaults and
+locks are readable despite the runner's private umask. Ubuntu Jammy security and
+update origins are explicitly allowed by unattended-upgrades on Mint 21.
+
+MATE now receives five-minute screen locking alongside GNOME/Cinnamon. An explicit
+README instruction to block Chromium pop-ups generates a managed policy instead of
+editing live browser Preferences. Check chrome://policy after reload/restart;
+conflicting policies and image scoring still require live verification.
+
+Pasted user lists accept password-label lines and end at Competition Guidelines.
+`--skip-forensics` now skips both solvers by explicit request; use only after saving
+and verifying your answers. Scoring remains the authority, not module PASS statuses.
+
+Validation uses offline fixtures and Linux command stubs, not the scored image.
+The final Round 1 five-point check was never confirmed and is not claimed solved.
+Schema reference: https://github.com/linuxmint/mintupdate/blob/master.mint21/usr/share/glib-2.0/schemas/com.linuxmint.updates.gschema.xml
+
+## Required-service verification and later-round investigation
+
+See [later-round reliability](docs/LATER_ROUND_RELIABILITY.md) for SSH rollback and
+access preservation, final required-service/configuration checks, capability/ACL
+and disguised-file investigation, NFS/SNMP indicators, and verification boundaries.
+Read `data/postflight.txt` alongside module results and the official score. A review
+or failure is now propagated instead of being hidden behind a module success log.

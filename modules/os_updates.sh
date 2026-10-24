@@ -14,7 +14,7 @@ update_package_lists() {
     log_section "Updating Package Lists"
 
     log_info "Running apt-get update..."
-    if apt-get update >/dev/null 2>&1; then
+    if apt-get -o APT::Update::Error-Mode=any update; then
         log_success "Package lists updated successfully"
         return 0
     else
@@ -59,53 +59,13 @@ configure_unattended_upgrades() {
 
 # Enable automatic update timers
 enable_auto_update_timers() {
-    log_section "Enabling Automatic Update Timers"
-
-    # Check if systemd is available
-    if ! command_exists systemctl; then
-        log_warn "systemctl not found, skipping timer configuration"
-        return 0
-    fi
-
-    # Enable apt-daily.timer
-    log_info "Enabling apt-daily.timer..."
-    if systemctl enable apt-daily.timer >/dev/null 2>&1; then
-        log_success "apt-daily.timer enabled"
-    else
-        log_warn "Failed to enable apt-daily.timer"
-    fi
-
-    # Start apt-daily.timer
-    log_info "Starting apt-daily.timer..."
-    systemctl start apt-daily.timer >/dev/null 2>&1
-
-    # Enable apt-daily-upgrade.timer
-    log_info "Enabling apt-daily-upgrade.timer..."
-    if systemctl enable apt-daily-upgrade.timer >/dev/null 2>&1; then
-        log_success "apt-daily-upgrade.timer enabled"
-    else
-        log_warn "Failed to enable apt-daily-upgrade.timer"
-    fi
-
-    # Start apt-daily-upgrade.timer
-    log_info "Starting apt-daily-upgrade.timer..."
-    systemctl start apt-daily-upgrade.timer >/dev/null 2>&1
-
-    # Verify timers are active
-    log_info "Verifying timer status..."
-    if systemctl is-active --quiet apt-daily.timer; then
-        log_success "apt-daily.timer is active"
-    else
-        log_warn "apt-daily.timer is not active"
-    fi
-
-    if systemctl is-active --quiet apt-daily-upgrade.timer; then
-        log_success "apt-daily-upgrade.timer is active"
-    else
-        log_warn "apt-daily-upgrade.timer is not active"
-    fi
-
-    return 0
+    local unit
+    command_exists systemctl || { log_error "systemd timers unavailable"; return 1; }
+    for unit in apt-daily.timer apt-daily-upgrade.timer; do
+        systemctl enable --now "$unit" || return 1
+        systemctl is-enabled --quiet "$unit" || return 1
+        systemctl is-active --quiet "$unit" || return 1
+    done
 }
 
 # Perform full system upgrade
@@ -120,15 +80,12 @@ perform_full_upgrade() {
     # Use DEBIAN_FRONTEND to avoid interactive prompts
     export DEBIAN_FRONTEND=noninteractive
 
-    if apt-get -y full-upgrade -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" >/dev/null 2>&1; then
+    if apt-get --no-remove -y full-upgrade -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"; then
         log_success "Full system upgrade completed successfully"
     else
-        log_warn "Full system upgrade had non-fatal warnings, attempting key packages..."
+        log_error "Full upgrade failed; inspect APT output before retrying"
+        return 1
     fi
-
-    # Ensure key packages mentioned in scoring (systemd, chromium, openssh) are specifically updated
-    log_info "Ensuring systemd, chromium, and openssh packages are updated..."
-    apt-get install -y --only-upgrade systemd chromium* openssh-server openssh-client 2>/dev/null || true
 
     return 0
 }
@@ -186,34 +143,19 @@ APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Download-Upgradeable-Packages "1";
 APT::Periodic::Unattended-Upgrade "1";
 APT::Periodic::AutocleanInterval "7";
-APT::Periodic::Autoremove "1";
-APT::Periodic::AutoremoveInterval "7";
 EOF
 
+    chmod 644 "$auto_conf" || return 1
     log_success "Automatic APT update policies enabled"
 }
 
 # Ensure unattended-upgrades will clean up old kernels and dependencies
 configure_unattended_cleanup_policy() {
-    log_section "Configuring Unattended-Upgrades Cleanup"
-
-    local unattended_conf="/etc/apt/apt.conf.d/50unattended-upgrades"
-
-    if [[ -f "$unattended_conf" ]]; then
-        backup_file "$unattended_conf"
-    fi
-
-    touch "$unattended_conf"
-
-    if ! grep -q "Remove-Unused-Kernel-Packages" "$unattended_conf"; then
-        echo "Unattended-Upgrade::Remove-Unused-Kernel-Packages \"true\";" >>"$unattended_conf"
-    fi
-
-    if ! grep -q "Remove-Unused-Dependencies" "$unattended_conf"; then
-        echo "Unattended-Upgrade::Remove-Unused-Dependencies \"true\";" >>"$unattended_conf"
-    fi
-
-    log_success "Unattended-upgrades cleanup policies configured"
+    # Owned override: a commented vendor default is not an enabled setting.
+    local path=/etc/apt/apt.conf.d/99-cp-cleanup
+    [[ ! -f "$path" ]] || backup_file "$path" || return 1
+    printf 'Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";\nUnattended-Upgrade::Remove-Unused-Dependencies "true";\n' > "$path" || return 1
+    chmod 644 "$path" || return 1
 }
 
 # Create a timer to run flatpak updates automatically
@@ -254,106 +196,46 @@ Persistent=true
 WantedBy=timers.target
 EOF
 
-    systemctl daemon-reload >/dev/null 2>&1
-    systemctl enable cp-flatpak-update.timer >/dev/null 2>&1 && systemctl start cp-flatpak-update.timer >/dev/null 2>&1
+    systemctl daemon-reload || return 1
+    systemctl enable --now cp-flatpak-update.timer || return 1
 
     log_success "Flatpak auto-update timer enabled"
 }
 
 # Refresh Mint update metadata shortly after login and regularly afterwards
 configure_mint_update_manager_refresh() {
-    log_section "Configuring Mint Update Manager Refresh"
-
-    if ! command_exists systemctl; then
-        log_warn "systemd not available; cannot configure refresh schedule"
-        return 0
-    fi
-
-    local service="/etc/systemd/system/cp-mintupdate-refresh.service"
-    local timer="/etc/systemd/system/cp-mintupdate-refresh.timer"
-
-    cat >"$service" <<'EOF'
-[Unit]
-Description=CyberPatriot - Refresh Mint updates and Flatpak catalog
-ConditionACPower=true
-
-[Service]
-Type=oneshot
-ExecStart=/bin/bash -c 'if command -v mintupdate-cli >/dev/null 2>&1; then mintupdate-cli refresh; fi; if command -v flatpak >/dev/null 2>&1; then flatpak update --app --runtime --assumeyes --noninteractive --no-related; fi'
-EOF
-
-    cat >"$timer" <<'EOF'
-[Unit]
-Description=Schedule Mint update refreshes (10 minutes after login, then every 2 hours)
-
-[Timer]
-OnBootSec=10min
-OnUnitActiveSec=2h
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-EOF
-
-    systemctl daemon-reload >/dev/null 2>&1
-    systemctl enable cp-mintupdate-refresh.timer >/dev/null 2>&1 && systemctl start cp-mintupdate-refresh.timer >/dev/null 2>&1
-
+    python3 "$SCRIPT_DIR/../lib/mint_update_config.py" || return 1
+    dconf update || return 1
+    chmod 644 /etc/dconf/db/local || return 1
     if command_exists mintupdate-automation; then
-        mintupdate-automation upgrade enable >/dev/null 2>&1 || true
-        mintupdate-automation autoremove enable >/dev/null 2>&1 || true
+        mintupdate-automation upgrade enable || return 1
+    else
+        log_error "Mint native update automation command missing"
+        return 1
     fi
-    systemctl enable --now mintupdate-automation-upgrade.timer >/dev/null 2>&1 || true
-    systemctl enable --now mintupdate-automation-autoremove.timer >/dev/null 2>&1 || true
-    systemctl enable --now apt-daily.timer apt-daily-upgrade.timer >/dev/null 2>&1 || true
+    systemctl enable --now mintupdate-automation-upgrade.timer || return 1
+    systemctl is-enabled --quiet mintupdate-automation-upgrade.timer || return 1
+    log_success "Native Mint refresh, Flatpak/spice preferences and package automation configured"
+}
 
-    # System-wide dconf configuration for Mint Update Manager
-    mkdir -p /etc/dconf/db/local.d /etc/dconf/profile
-    cat > /etc/dconf/profile/user <<'EOF'
-user-db:user
-system-db:local
-EOF
-
-    cat > /etc/dconf/db/local.d/01-mintupdate <<'EOF'
-[com/linuxmint/updates]
-autorefresh-days=0
-autorefresh-hours=2
-autorefresh-minutes=0
-auto-update=true
-auto-update-enabled=true
-refresh-schedule-enabled=true
-automation-upgrade=true
-automation-autoremove=true
-remove-obsolete-kernels=true
-EOF
-    dconf update >/dev/null 2>&1 || true
-
-    # Per-user gsettings configuration
-    while IFS= read -r u; do
-        [[ -z "$u" ]] && continue
-        for k in auto-update refresh-schedule-enabled automation-upgrade auto-update-enabled; do
-            sudo -u "$u" gsettings set com.linuxmint.updates "$k" true >/dev/null 2>&1 || true
-        done
-        sudo -u "$u" gsettings set com.linuxmint.updates autorefresh-hours 2 >/dev/null 2>&1 || true
-        sudo -u "$u" gsettings set com.linuxmint.updates autorefresh-minutes 0 >/dev/null 2>&1 || true
-    done < <(awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' /etc/passwd)
-
-    gsettings set com.linuxmint.updates refresh-schedule-enabled true >/dev/null 2>&1 || true
-    gsettings set com.linuxmint.updates auto-update-enabled true >/dev/null 2>&1 || true
-    gsettings set com.linuxmint.updates automation-upgrade true >/dev/null 2>&1 || true
-
-    log_success "Mint Update Manager refresh schedule and automation enabled"
+update_flatpak_apps() {
+    command_exists flatpak || return 0
+    flatpak --system update --assumeyes --noninteractive || return 1
+    local user home
+    while IFS=: read -r user home; do
+        [[ -d "$home/.local/share/flatpak" ]] || continue
+        runuser -u "$user" -- env HOME="$home" flatpak --user update --assumeyes --noninteractive || return 1
+    done < <(awk -F: '$3 >= 1000 && $3 < 65534 {print $1 ":" $6}' /etc/passwd)
 }
 
 # Dedicated upgrade for competition-scored critical packages
 upgrade_critical_packages() {
-    log_section "Upgrading Critical Packages (systemd, chromium, openssh)"
-    DEBIAN_FRONTEND=noninteractive apt-get update -y >/dev/null 2>&1 || true
-    DEBIAN_FRONTEND=noninteractive apt-get --only-upgrade install -y \
-        systemd systemd-sysv libsystemd0 systemd-timesyncd \
-        chromium chromium-browser chromium-codecs-ffmpeg-extra \
-        openssh-server openssh-client openssh-sftp-server \
-        firefox firefox-locale-en bash sudo login passwd >/dev/null 2>&1 || true
-    log_success "Critical packages upgrade executed"
+    local pkg installed=()
+    for pkg in systemd chromium chromium-browser openssh-server openssh-client firefox bash sudo login passwd; do
+        [[ "$(dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null)" == 'install ok installed' ]] && installed+=("$pkg")
+    done
+    (( ${#installed[@]} )) || return 0
+    DEBIAN_FRONTEND=noninteractive apt-get --no-remove -y -o Dpkg::Options::="--force-confold" --only-upgrade install "${installed[@]}" || return 1
 }
 
 # Clear package holds that would block updates
@@ -392,11 +274,11 @@ configure_mint_specific_updates() {
         return 0
     fi
 
-    enable_automatic_apt_updates
-    configure_unattended_cleanup_policy
-    enable_flatpak_auto_updates
-    configure_mint_update_manager_refresh
-    clear_mint_blocklist
+    enable_automatic_apt_updates || return 1
+    configure_unattended_cleanup_policy || return 1
+    enable_flatpak_auto_updates || return 1
+    configure_mint_update_manager_refresh || return 1
+    # Preserve intentional holds; report pending packages instead.
 
     log_success "Mint-specific update settings applied"
 }
@@ -412,12 +294,15 @@ display_update_summary() {
 
     # Check for available updates
     log_info "Checking for remaining updates..."
-    local updates=$(apt-get -s upgrade 2>/dev/null | grep -c "^Inst")
+    local simulation updates
+    simulation=$(apt-get -s full-upgrade) || return 1
+    updates=$(grep -c '^Inst ' <<<"$simulation" || true)
 
     if [[ $updates -eq 0 ]]; then
         log_success "System is fully up to date"
     else
-        log_info "There are $updates package(s) that could be updated"
+        log_warn "There are $updates pending updates; system is not fully updated"
+        [[ "${FORCE_NO_UPGRADE:-0}" == 1 ]] || return 1
     fi
 
     return 0
@@ -460,6 +345,10 @@ run_os_updates() {
             ;;
     esac
 
+    # Restore Mint 21 official sources before trusting available-update counts.
+    if [[ "$(detect_os)" == linuxmint && "$(detect_os_version)" == 21* ]]; then
+        python3 "$SCRIPT_DIR/../lib/mint_update_config.py" --restore-sources || return 1
+    fi
     # Update package lists
     if ! update_package_lists; then
         log_error "Cannot proceed without updated package lists"
@@ -467,35 +356,31 @@ run_os_updates() {
     fi
 
     # Install unattended-upgrades
-    install_unattended_upgrades
+    install_unattended_upgrades || return 1
 
     # Configure automatic updates
-    configure_unattended_upgrades
+    configure_unattended_upgrades || return 1
 
     # Enable systemd timers for automatic updates
-    enable_auto_update_timers
-
-    # Always upgrade critical packages scored in competition
-    upgrade_critical_packages
+    enable_auto_update_timers || return 1
 
     if [[ "$update_choice" == "1" ]]; then
         log_warn "Skipping full system upgrade per user selection"
     else
+        upgrade_critical_packages || return 1
         # Perform full system upgrade
-        perform_full_upgrade
+        perform_full_upgrade || return 1
+        update_flatpak_apps || return 1
 
         # Clean up unnecessary packages
-        autoremove_packages
+        # Preserve rollback kernels and avoid unrelated automatic removals.
 
         # Check if reboot is needed (after kernel updates)
         check_reboot_required
     fi
 
-    # Display summary
-    display_update_summary
-
-    # Apply Mint Update Manager automation if applicable
-    configure_mint_specific_updates
+    configure_mint_specific_updates || return 1
+    display_update_summary || return 1
 
     log_success "OS Updates module completed"
     return 0

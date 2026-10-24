@@ -1271,7 +1271,7 @@ run_user_auditing() {
 
     # Run all auditing functions
     # Each step is independent: one failing must never skip the rest (a mid-module abort used to skip password rotation).
-    local step
+    local step status=0
     for step in disable_guest_account \
                 fix_root_uid_users \
                 remove_unauthorized_users \
@@ -1290,12 +1290,15 @@ run_user_auditing() {
                 ensure_system_accounts_nologin \
                 ensure_matching_uid_gid \
                 verify_user_account_shells; do
-        "$step" || log_warn "user_auditing step $step failed; continuing"
+        if ! "$step"; then
+            log_error "user_auditing step $step failed"
+            status=1
+        fi
     done
 
     log_section "User Auditing Complete"
+    (( status == 0 )) || return 1
     log_success "All user auditing tasks completed"
-
     return 0
 }
 

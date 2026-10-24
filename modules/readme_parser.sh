@@ -161,10 +161,7 @@ parse_readme() {
         elif ! jq -e --slurpfile d "$det_file" \
                 '([.all_users[].name | ascii_downcase] | sort) == ([$d[0].all_users[].name] | sort)' <<<"$json_data" >/dev/null; then
             log_warn "AI user list disagrees with README sections; using deterministic users/roles/services"
-            json_data=$(jq --slurpfile d "$det_file" \
-                '. as $ai | $d[0] | del(.passwords, .unparsed_hints)
-                 | .recent_hires = ($ai.recent_hires // []) | .terminated_users = ($ai.terminated_users // [])
-                 | .groups_to_create = ($ai.groups_to_create // []) | .system_users_to_restrict = ($ai.system_users_to_restrict // [])' <<<"$json_data")
+            json_data=$(jq 'del(.passwords, .unparsed_hints)' "$det_file")
         fi
     fi
     rm -f -- "$det_file"

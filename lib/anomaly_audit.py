@@ -58,7 +58,8 @@ def collect(engine):
     coverage = ['Read-only heuristic audit; not exhaustive and not proof that an image is clean.', 'No automatic deletion, quarantine, account changes, or AI shell execution.', 'Only explicitly selected persistence/config files are read; private SSH keys and password databases are not collected.']
     authorized = None
     try:
-        authorized = {u['name'] for u in json.loads((engine / 'data/readme_parsed.json').read_text())['all_users']}
+        data = json.loads((engine / 'data/readme_parsed.json').read_text())
+        authorized = {u['name'] for u in data['all_users'] + data.get('recent_hires', []) if isinstance(u, dict)}
     except (OSError, ValueError, KeyError, TypeError):
         coverage.append('No validated README data available; unauthorized-account comparison omitted.')
     try:
@@ -133,6 +134,12 @@ def collect(engine):
     }
     if os.environ.get('AUDIT_PACKAGE_CHECK') == '1':
         commands['package_integrity'] = ['dpkg', '-V']
+        from privilege_audit import collect as collect_privileges
+        privilege_report = collect_privileges()
+        findings.extend(privilege_report['findings'])
+        errors.extend(privilege_report['errors'])
+        if privilege_report['truncated']:
+            coverage.append('Privilege/disguised-file walk reached its entry/time budget; inspect remaining paths manually.')
     else:
         coverage.append('Package integrity is deferred until forensics finish; a broad package scan may affect file access times.')
     snapshots = {name: command_snapshot(args) for name, args in commands.items()}

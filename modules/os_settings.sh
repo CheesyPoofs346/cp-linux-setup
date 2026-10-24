@@ -555,6 +555,13 @@ configure_screen_security() {
     mkdir -p "$dconf_dir" "$lock_dir"
 
     cat > "$config_file" <<'EOF'
+[org/mate/screensaver]
+lock-enabled=true
+idle-activation-enabled=true
+
+[org/mate/session]
+idle-delay=5
+
 [org/gnome/desktop/session]
 idle-delay=uint32 300
 
@@ -587,6 +594,9 @@ power-button-action='interactive'
 EOF
 
     cat > "$lock_file" <<'EOF'
+/org/mate/screensaver/lock-enabled
+/org/mate/screensaver/idle-activation-enabled
+/org/mate/session/idle-delay
 /org/gnome/desktop/session/idle-delay
 /org/gnome/desktop/screensaver/idle-activation-enabled
 /org/gnome/desktop/screensaver/lock-delay
@@ -607,8 +617,14 @@ EOF
 /org/cinnamon/settings-daemon/plugins/power/power-button-action
 EOF
 
+    mkdir -p /etc/dconf/profile
+    [[ -f /etc/dconf/profile/user ]] || printf 'user-db:user\nsystem-db:local\n' > /etc/dconf/profile/user
+    grep -qx 'system-db:local' /etc/dconf/profile/user || echo 'system-db:local' >> /etc/dconf/profile/user
+    chmod 755 /etc/dconf /etc/dconf/profile /etc/dconf/db "$dconf_dir" "$lock_dir" || return 1
+    chmod 644 /etc/dconf/profile/user "$config_file" "$lock_file" || return 1
     if command_exists dconf; then
         if dconf update 2>/dev/null; then
+            chmod 644 /etc/dconf/db/local || return 1
             log_success "✓ Applied screen timeout, locking, and power policies (requires relogin)"
         else
             log_warn "Failed to run 'dconf update'; apply settings manually if needed"

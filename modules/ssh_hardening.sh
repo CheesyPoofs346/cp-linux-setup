@@ -44,18 +44,18 @@ ssh_service_reload() {
 
     if command_exists systemctl; then
         if systemctl list-unit-files | grep -q '^ssh\.service'; then
-            systemctl reload ssh >/dev/null 2>&1
+            systemctl reload ssh >/dev/null 2>&1 || return 1
             log_success "SSH service reloaded (ssh.service)"
             return 0
         elif systemctl list-unit-files | grep -q '^sshd\.service'; then
-            systemctl reload sshd >/dev/null 2>&1
+            systemctl reload sshd >/dev/null 2>&1 || return 1
             log_success "SSH service reloaded (sshd.service)"
             return 0
         fi
     fi
 
     if command_exists service; then
-        service ssh reload >/dev/null 2>&1 || service sshd reload >/dev/null 2>&1
+        service ssh reload >/dev/null 2>&1 || service sshd reload >/dev/null 2>&1 || return 1
         log_success "SSH service reloaded"
         return 0
     fi
@@ -66,115 +66,15 @@ ssh_service_reload() {
 
 # Create hardened SSH configuration
 create_hardened_config() {
-    log_section "Creating Hardened SSH Configuration"
-
-    # Create config directory if it doesn't exist
-    if [[ ! -d "$SSHD_CONFIG_DIR" ]]; then
-        log_info "Creating $SSHD_CONFIG_DIR directory"
-        mkdir -p "$SSHD_CONFIG_DIR"
-        chmod 0755 "$SSHD_CONFIG_DIR"
+    backup_file /etc/ssh/sshd_config || return 1
+    [[ ! -f "$SSHD_CONFIG_FILE" ]] || backup_file "$SSHD_CONFIG_FILE" || return 1
+    local args=(--port "$SSH_PORT" --allow-users "$SSH_ALLOW_USERS" --banner "$SSH_BANNER_FILE" --snippet "$SSHD_CONFIG_FILE")
+    if [[ "${SSH_KEY_ONLY:-0}" == 1 ]]; then
+        [[ -n "$SSH_PUBLIC_KEY" ]] || { log_error "Key-only mode requires an explicit verified public key"; return 1; }
+        args+=(--key-only)
     fi
-
-    # Backup existing config if present
-    if [[ -f "$SSHD_CONFIG_FILE" ]]; then
-        backup_file "$SSHD_CONFIG_FILE"
-    fi
-
-    # Build AllowUsers line
-    local allow_users_line="# AllowUsers not set"
-    if [[ -n "$SSH_ALLOW_USERS" ]]; then
-        allow_users_line="AllowUsers ${SSH_ALLOW_USERS}"
-        log_info "Restricting SSH access to users: $SSH_ALLOW_USERS"
-    fi
-
-    # Create hardened configuration
-    log_info "Writing hardened SSH configuration to $SSHD_CONFIG_FILE"
-    cat > "$SSHD_CONFIG_FILE" <<EOF
-# === CyberPatriot SSH Hardening (auto) ===
-# Protocol 1 is removed in modern OpenSSH; Protocol 2 is implicit.
-Port ${SSH_PORT}
-
-# Logging and DNS
-SyslogFacility AUTHPRIV
-LogLevel VERBOSE
-StrictModes yes
-UseDNS no
-VersionAddendum none
-
-# Authentication settings
-PermitRootLogin no
-PermitEmptyPasswords no
-PasswordAuthentication no
-KbdInteractiveAuthentication no
-ChallengeResponseAuthentication no
-PubkeyAuthentication yes
-AuthenticationMethods publickey
-PermitUserEnvironment no
-UsePAM yes
-
-# Forwarding and tunneling (all disabled)
-X11Forwarding no
-AllowAgentForwarding no
-AllowTcpForwarding no
-GatewayPorts no
-PermitTunnel no
-
-# Timing and limits
-LoginGraceTime 30
-MaxAuthTries 3
-MaxSessions 2
-ClientAliveInterval 300
-ClientAliveCountMax 2
-TCPKeepAlive no
-
-# Host-based authentication (disabled)
-IgnoreRhosts yes
-HostbasedAuthentication no
-
-# Keys and banner
-AuthorizedKeysFile .ssh/authorized_keys
-Banner ${SSH_BANNER_FILE}
-PrintMotd no
-PrintLastLog yes
-
-# Algorithms (compatible with Ubuntu 24/Mint 21 OpenSSH)
-Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes256-ctr
-MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
-KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group-exchange-sha256
-
-${allow_users_line}
-EOF
-
-    chmod 0644 "$SSHD_CONFIG_FILE"
-    # Subsystem may be defined only once; the stock sshd_config already has it (a duplicate fails sshd -t).
-    if ! grep -qE '^[[:space:]]*Subsystem[[:space:]]' /etc/ssh/sshd_config 2>/dev/null; then
-        printf 'Subsystem sftp internal-sftp\n' >> "$SSHD_CONFIG_FILE"
-    fi
-
-    # No key to install: never lock the operator out; keep password logins, harden everything else.
-    if [[ -z "$SSH_PUBLIC_KEY" ]]; then
-        sed -i -E 's/^PasswordAuthentication no/PasswordAuthentication yes/; /^AuthenticationMethods publickey/d; s/^KbdInteractiveAuthentication no/KbdInteractiveAuthentication yes/; s/^ChallengeResponseAuthentication no/ChallengeResponseAuthentication yes/' "$SSHD_CONFIG_FILE"
-        log_warn "No SSH public key: password authentication left ON to avoid lockout (everything else hardened)"
-    fi
-
-    # Directly harden /etc/ssh/sshd_config: scoring checkers read this file, and first match wins in sshd
-    local main_sshd_config="/etc/ssh/sshd_config" pair key val
-    if [[ -f "$main_sshd_config" ]]; then
-        backup_file "$main_sshd_config" 2>/dev/null || true
-        for pair in "PermitRootLogin no" "PermitEmptyPasswords no" "Protocol 2" "X11Forwarding no" "MaxAuthTries 4"                     "PermitUserEnvironment no" "HostbasedAuthentication no" "IgnoreRhosts yes" "LoginGraceTime 60"                     "ClientAliveInterval 300" "ClientAliveCountMax 2" "LogLevel VERBOSE" "UsePAM yes" "StrictModes yes"                     "AllowAgentForwarding no" "MaxSessions 4" "PubkeyAuthentication yes"; do
-            key=${pair%% *}; val=${pair#* }
-            if grep -qE "^[[:space:]]*#?[[:space:]]*${key}[[:space:]]" "$main_sshd_config"; then
-                sed -i -E "s/^[[:space:]]*#?[[:space:]]*${key}[[:space:]].*/${key} ${val}/" "$main_sshd_config"
-            elif [[ "$key" != Protocol ]]; then
-                sed -i "1i ${key} ${val}" "$main_sshd_config"  # top of file: before any Match block
-            fi
-        done
-        # collapse duplicate directive lines created by the substitution above
-        awk '!(/^[A-Za-z]+ / && seen[$0]++)' "$main_sshd_config" > "$main_sshd_config.cp" && cat "$main_sshd_config.cp" > "$main_sshd_config"; rm -f "$main_sshd_config.cp"
-    fi
-
-    log_success "Hardened SSH configuration created"
-    return 0
+    python3 "$SCRIPT_DIR/../lib/ssh_policy.py" "${args[@]}" || return 1
+    log_success "SSH global baseline validated; Match blocks preserved"
 }
 
 # Create SSH banner
@@ -400,7 +300,7 @@ display_summary() {
     log_info "Configuration details:"
     log_info "  - Port: ${SSH_PORT}"
     log_info "  - PermitRootLogin: no"
-    log_info "  - PasswordAuthentication: no (public key only)"
+    log_info "  - Key-only mode: ${SSH_KEY_ONLY:-0}; verify effective policy for every required account"
     log_info "  - PermitEmptyPasswords: no"
     log_info "  - PermitUserEnvironment: no"
     log_info "  - X11Forwarding: no"
@@ -429,21 +329,14 @@ run_ssh_hardening() {
         return 0
     fi
 
-    # Execute hardening steps
-    create_hardened_config
-    create_ssh_banner
-    harden_ssh_permissions
-    setup_user_ssh
-    harden_moduli
-    configure_ufw_ssh
-
-    # Validate and reload
-    if ! validate_ssh_config; then
-        log_error "SSH configuration validation failed, not reloading service"
-        return 1
-    fi
-
-    ssh_service_reload
+    create_ssh_banner || return 1
+    harden_ssh_permissions || return 1
+    setup_user_ssh || return 1
+    create_hardened_config || return 1
+    harden_moduli || return 1
+    configure_ufw_ssh || return 1
+    validate_ssh_config || return 1
+    ssh_service_reload || return 1
     display_summary
 
     log_success "SSH Hardening module completed"

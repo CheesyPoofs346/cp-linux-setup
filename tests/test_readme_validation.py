@@ -83,15 +83,15 @@ SSH
         data = {'all_users': [{'name': 'benjamin', 'account_type': 'admin', 'groups': []}, {'name': 'alice', 'account_type': 'standard', 'groups': []}, {'name': 'bob', 'account_type': 'standard', 'groups': []}], 'recent_hires': [], 'terminated_users': [], 'critical_services': ['ssh'], 'groups_to_create': [], 'system_users_to_restrict': []}
         self.assertEqual(guard.validate(text, data), 3)
 
-    def test_auto_remediate_allows_actions(self):
+    def test_auto_remediate_rejects_unbacked_actions(self):
         import os
         old = os.environ.get('AUTO_REMEDIATE')
         os.environ['AUTO_REMEDIATE'] = '1'
         try:
             data = copy.deepcopy(DATA)
             data['terminated_users'] = ['member']
-            # Should not raise under AUTO_REMEDIATE=1
-            self.assertEqual(guard.validate(HTML, data), 3)
+            with self.assertRaisesRegex(ValueError, 'matching README evidence'):
+                guard.validate(HTML, data)
         finally:
             if old is None:
                 del os.environ['AUTO_REMEDIATE']

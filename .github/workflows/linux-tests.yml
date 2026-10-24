@@ -1,0 +1,27 @@
+name: Linux regression tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  fixtures:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Install test prerequisite
+        run: sudo apt-get update && sudo apt-get install -y jq
+      - name: Python fixtures
+        run: python3 -m unittest discover -s tests
+      - name: Shell and orchestration fixtures
+        run: |
+          bash tests/test_syntax.sh
+          bash tests/test_parser.sh
+          bash tests/test_runner.sh
+          bash tests/test_paste_readme.sh
+          bash tests/test_extra_hardening.sh
